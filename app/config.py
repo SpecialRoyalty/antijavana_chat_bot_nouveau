@@ -1,5 +1,7 @@
 from __future__ import annotations
 from functools import lru_cache
+from typing import Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,10 +19,10 @@ class Settings(BaseSettings):
     admin_ids: str = ''
     trusted_ids: str = ''
     main_group_id: int | None = None
-    pass_soiree_group_id: int | None = None
-    pass_total_group_id: int | None = None
-    vip_javana_group_id: int | None = None
-    log_group_id: int | None = None
+    pass_soiree_group_id: Optional[int] = None
+    pass_total_group_id: Optional[int] = None
+    vip_javana_group_id: Optional[int] = None
+    log_group_id: Optional[int] = None
     public_bot_username: str = ''
     default_vote_target: int = 120
     timezone: str = 'Europe/Paris'
