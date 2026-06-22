@@ -1,22 +1,36 @@
-# Telegram Railway Bot — Python V1
+# Telegram Railway Bot V2 — Core fonctionnel
 
-Stack: Python 3.12, Aiogram 3, PostgreSQL, SQLAlchemy async, APScheduler, Railway.
+Stack : Python 3.12, Aiogram 3, PostgreSQL, SQLAlchemy async, APScheduler.
+
+## Important
+Ce ZIP contient une base fonctionnelle robuste pour le cœur : message unique, vote, ouverture/fermeture, panel admin, nettoyage, modération principale, santé bot, mode partiel VIP. Les modules lourds du cahier des charges sont structurés et prêts à compléter.
 
 ## Déploiement Railway
-1. Créer un bot via BotFather et récupérer `BOT_TOKEN`.
+1. Créer un bot via BotFather.
 2. Créer un projet Railway avec PostgreSQL.
-3. Ajouter les variables de `.env.example`.
-4. Déployer ce repo GitHub sur Railway.
-5. Ajouter le bot admin dans les groupes Telegram requis.
+3. Ajouter les variables `.env.example`.
+4. Déployer ce repo.
+5. Ajouter le bot admin du groupe principal.
+6. Mettre `MAIN_GROUP_ID=-100...`.
 
-## Démarrage local
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python -m app.main
+## Variables minimales
+```env
+BOT_TOKEN=xxx
+DATABASE_URL=postgresql+asyncpg://...
+ADMIN_IDS=123456789
+TRUSTED_IDS=123456789,987654321
+MAIN_GROUP_ID=-1001234567890
 ```
 
-## État
-Base V1 structurée : admin panel, horaires, votes, modération, trusted commands, santé, sessions, VIP, invitations, suspects, hash média. Les fonctions critiques sont isolées dans `app/services/` pour continuer proprement.
+Les groupes VIP peuvent rester vides. Le bot passe en fonctionnement partiel.
+
+## Comportement corrigé
+- Un seul message statut : édition prioritaire, recréation uniquement si disparu.
+- Les groupes optionnels vides ne font pas planter le démarrage.
+- Bouton vote : ajoute le vote, édite le même message.
+- Groupe fermé : supprime les messages random.
+- Panel admin en privé : `/start`.
+- Santé bot : vérifie DB, Telegram, groupes configurés, prochain horaire.
+
+## Notes
+Telegram ne permet pas de relire toute l'historique d'un groupe comme une base de données. Le bot ne peut supprimer de façon fiable que les messages qu'il a vus et stockés depuis son lancement.
