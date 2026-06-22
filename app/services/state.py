@@ -6,7 +6,7 @@ from app.config import get_settings
 from app.db.session import SessionLocal
 from app.db.models import Vote, TrackedMessage, ErrorLog
 from app.services import settings as st
-from app.utils.time import day_key, next_open_text, in_slot
+from app.utils.time import day_key, countdown_text, in_slot, slot_times
 from app.keyboards.common import vote_kb
 
 async def log_error(area,msg):
@@ -30,20 +30,25 @@ async def add_vote(chat_id:int,user_id:int):
         db.add(Vote(chat_id=chat_id,user_id=user_id,day_key=day_key(s.timezone))); await db.commit(); return True
 
 async def status_text(chat_id:int):
-    goal=await st.vote_goal(); votes=await vote_count(chat_id); slot=await st.time_slot()
+    goal=await st.vote_goal(); votes=await vote_count(chat_id); slot=await st.time_slot(); s=get_settings()
+    opening=slot.split('-')[0]; closing=slot.split('-')[1]
     if not await st.auto_enabled():
         if await st.is_open():
             return '🟢 GROUPE OUVERT\n\nVous pouvez envoyer vos médias <3\n\nMode manuel : fermeture de sécurité active.'
         return '🔴 MAINTENANCE\n\nLe système est en maintenance ce soir.\n\nAucune ouverture prévue.'
     if await st.is_open():
-        return '🟢 GROUPE OUVERT\n\nVous pouvez envoyer vos médias <3'
-    missing=max(goal-votes,0); opening=slot.split('-')[0]
-    base=f'🔴 GROUPE FERMÉ\n\nOuverture prévue à {opening}.\nTemps restant : {next_open_text(slot,get_settings().timezone)}\n\nObjectif :\n{votes} / {goal} votes\n'
-    if votes>=goal:
-        if in_slot(slot,get_settings().timezone):
+        return f'🟢 GROUPE OUVERT\n\nObjectif atteint : {votes} / {goal} ✅\n\nVous pouvez envoyer vos médias <3\n\nFermeture prévue à {closing}.'
+    missing=max(goal-votes,0)
+    achieved=votes>=goal
+    if achieved:
+        if in_slot(slot,s.timezone):
+            return f'🟢 OBJECTIF ATTEINT\n\nLe groupe est maintenant ouvert.\n\nFermeture prévue à {closing}.\n\nVous pouvez envoyer vos médias <3'
+        remaining=countdown_text(slot,s.timezone,achieved=True)
+        if remaining == 'maintenant':
             return '🟢 OBJECTIF ATTEINT\n\nOuverture en cours...'
-        return base+'\n✅ Objectif atteint.\nLe groupe ouvrira automatiquement à l’heure prévue.'
-    return base+f'\nIl manque encore {missing} votes.'
+        return f'🟡 OBJECTIF ATTEINT\n\nLe groupe ouvrira automatiquement à {opening}.\n\nOuverture dans : {remaining}\n\nObjectif :\n{votes} / {goal} votes ✅\n\nPréparez vos médias.'
+    remaining=countdown_text(slot,s.timezone,achieved=False)
+    return f'🔴 GROUPE FERMÉ\n\nOuverture prévue à {opening}.\nTemps restant : {remaining}\n\nObjectif :\n{votes} / {goal} votes\n\nIl manque encore {missing} votes.'
 
 async def track(chat_id:int,message_id:int,user_id:int|None,kind='message',is_media=False):
     async with SessionLocal() as db:
@@ -65,6 +70,8 @@ async def ensure_status_message(bot:Bot, chat_id:int):
     if mid:
         try:
             await bot.edit_message_text(text, chat_id=chat_id, message_id=int(mid), reply_markup=kb)
+            from datetime import datetime
+            await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
             return int(mid)
         except TelegramBadRequest as e:
             low=str(e).lower()
@@ -72,7 +79,10 @@ async def ensure_status_message(bot:Bot, chat_id:int):
             if 'message to edit not found' not in low: await log_error('edit_status',e)
         except Exception as e: await log_error('edit_status',e)
     m=await bot.send_message(chat_id,text,reply_markup=kb)
-    await st.set_value('status_message_id',str(m.message_id)); await track(chat_id,m.message_id,None,'status',False)
+    await st.set_value('status_message_id',str(m.message_id));
+    from datetime import datetime
+    await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
+    await track(chat_id,m.message_id,None,'status',False)
     return m.message_id
 
 async def cleanup_known_status_duplicates(bot:Bot, chat_id:int):

@@ -4,7 +4,7 @@ from app.config import get_settings
 from app.db.session import SessionLocal
 from app.db.models import ErrorLog, TrackedMessage, User, VipOrder, Vote
 from app.services import settings as st
-from app.utils.time import mid_time, slot_times, next_open_text
+from app.utils.time import mid_time, slot_times, next_open_text, next_status_update_text
 
 async def health_text(bot:Bot):
     s=get_settings(); slot=await st.time_slot(); start,end=slot_times(slot,s.timezone)
@@ -35,6 +35,8 @@ Auto: {'ON' if await st.auto_enabled() else 'OFF'}
 Ouvert: {'OUI' if await st.is_open() else 'NON'}
 Créneau: {slot}
 Prochaine ouverture: {next_open_text(slot,s.timezone)}
+Prochaine mise à jour statut: {next_status_update_text(slot,s.timezone)}
+Dernière mise à jour statut: {await st.get_value('last_status_update_at','jamais')}
 Prochaine justice: {mid_time(slot,s.timezone).strftime('%H:%M')}
 Prochaine fermeture: {end.strftime('%H:%M')}
 
