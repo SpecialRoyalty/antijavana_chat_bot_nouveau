@@ -38,9 +38,10 @@ class Settings(BaseSettings):
     @classmethod
     def parse_ids(cls, v):
         if v is None or v == '': return []
-        if isinstance(v, list): return v
+        if isinstance(v, list): return [int(x) for x in v]
+        if isinstance(v, int): return [v]
         if isinstance(v, str): return [int(x.strip()) for x in v.split(',') if x.strip()]
-        return v
+        return []
 
     @field_validator('pass_soiree_group_id','pass_total_group_id','vip_javana_group_id','log_group_id', mode='before')
     @classmethod
