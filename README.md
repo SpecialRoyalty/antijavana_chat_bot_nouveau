@@ -1,36 +1,51 @@
-# Telegram Railway Bot V2 — Core fonctionnel
+# Telegram Railway Bot V4
 
-Stack : Python 3.12, Aiogram 3, PostgreSQL, SQLAlchemy async, APScheduler.
-
-## Important
-Ce ZIP contient une base fonctionnelle robuste pour le cœur : message unique, vote, ouverture/fermeture, panel admin, nettoyage, modération principale, santé bot, mode partiel VIP. Les modules lourds du cahier des charges sont structurés et prêts à compléter.
+Version Python/Aiogram pour Railway + PostgreSQL.
 
 ## Déploiement Railway
+
 1. Créer un bot via BotFather.
-2. Créer un projet Railway avec PostgreSQL.
-3. Ajouter les variables `.env.example`.
-4. Déployer ce repo.
-5. Ajouter le bot admin du groupe principal.
-6. Mettre `MAIN_GROUP_ID=-100...`.
+2. Créer PostgreSQL sur Railway.
+3. Ajouter les variables d'environnement depuis `.env.example`.
+4. `DATABASE_URL` peut rester celui de Railway (`postgresql://...`), le code le convertit en async automatiquement.
+5. Ajouter le bot admin du groupe principal avec droits : supprimer, bannir, restreindre, gérer liens, modifier permissions.
+6. Lancer le service Railway.
 
 ## Variables minimales
+
 ```env
-BOT_TOKEN=xxx
-DATABASE_URL=postgresql+asyncpg://...
+BOT_TOKEN=...
+DATABASE_URL=...
 ADMIN_IDS=123456789
-TRUSTED_IDS=123456789,987654321
-MAIN_GROUP_ID=-1001234567890
+TRUSTED_IDS=
+MAIN_GROUP_ID=-100...
+TIMEZONE=Europe/Paris
 ```
 
-Les groupes VIP peuvent rester vides. Le bot passe en fonctionnement partiel.
+Les groupes VIP peuvent être vides : fonctionnement partiel.
 
-## Comportement corrigé
-- Un seul message statut : édition prioritaire, recréation uniquement si disparu.
-- Les groupes optionnels vides ne font pas planter le démarrage.
-- Bouton vote : ajoute le vote, édite le même message.
-- Groupe fermé : supprime les messages random.
-- Panel admin en privé : `/start`.
-- Santé bot : vérifie DB, Telegram, groupes configurés, prochain horaire.
+## État honnête V4
 
-## Notes
-Telegram ne permet pas de relire toute l'historique d'un groupe comme une base de données. Le bot ne peut supprimer de façon fiable que les messages qu'il a vus et stockés depuis son lancement.
+Cette version implémente le coeur opérationnel :
+- message statut unique édité ;
+- votes ;
+- auto ON/OFF ;
+- ouverture/fermeture ;
+- nettoyage des messages suivis ;
+- panel admin branché ;
+- santé ;
+- modération de base ;
+- trusted commands ;
+- VIP/paiement admin ;
+- crowdfunding avec capture et validation ;
+- rediffusion copyMessage vers Pass soirée/Pass total ;
+- scheduler ;
+- anti-raccordement pirate ;
+- rapports ;
+- tracking erreurs.
+
+Limites Telegram importantes :
+- un bot ne peut pas relire tout l'historique passé. Il nettoie les messages qu'il voit depuis son lancement.
+- retirer tous les membres d'un groupe nécessite qu'ils soient connus par le bot via événements ou commandes ; Telegram ne fournit pas une liste complète via Bot API.
+- pHash réel image/vidéo nécessite téléchargement et traitement média ; cette V4 utilise `file_unique_id` Telegram pour une détection exacte. Le moteur perceptuel doit être ajouté avec Pillow/OpenCV si nécessaire.
+
