@@ -11,6 +11,21 @@ def _empty_to_none(v):
     return v
 
 
+def normalize_database_url(v: str) -> str:
+    """Railway often provides postgresql:// or postgres://.
+    SQLAlchemy async needs postgresql+asyncpg://.
+    """
+    if not v:
+        return v
+    if v.startswith("postgresql+asyncpg://"):
+        return v
+    if v.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + v[len("postgresql://"):]
+    if v.startswith("postgres://"):
+        return "postgresql+asyncpg://" + v[len("postgres://"):]
+    return v
+
+
 def parse_ids(v) -> List[int]:
     if v is None or v == "":
         return []
@@ -42,6 +57,11 @@ class Settings(BaseSettings):
     revolut_text: Optional[str] = None
     crypto_text: Optional[str] = None
     railway_environment: str = "production"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_db(cls, v):
+        return normalize_database_url(str(v))
 
     @field_validator("main_group_id", "pass_soiree_group_id", "pass_total_group_id", "vip_javana_group_id", "log_group_id", mode="before")
     @classmethod
