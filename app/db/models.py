@@ -139,3 +139,15 @@ class ErrorLog(Base):
     area: Mapped[str]=mapped_column(String(80), default='')
     message: Mapped[str]=mapped_column(Text, default='')
     created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
+
+
+class Advertisement(Base):
+    __tablename__='advertisements'
+    id: Mapped[int]=mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str]=mapped_column(String(255), default='Pub')
+    text: Mapped[str]=mapped_column(Text, default='')
+    image_file_id: Mapped[str|None]=mapped_column(Text, nullable=True)
+    button_text: Mapped[str|None]=mapped_column(String(255), nullable=True)
+    button_url: Mapped[str|None]=mapped_column(Text, nullable=True)
+    active: Mapped[bool]=mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
