@@ -1,51 +1,36 @@
-# Telegram Railway Bot V4
+# Bot Telegram Railway Python V5 — Corrections cahier des charges
 
-Version Python/Aiogram pour Railway + PostgreSQL.
+Corrections principales :
 
-## Déploiement Railway
+- Panel admin en boutons pour objectif, horaires, modération, crowdfunding, publicités, nettoyage, grâce.
+- Message principal unique édité au lieu d’être recréé.
+- Vote : actualisation immédiate ; si objectif atteint, le message affiche Objectif atteint et ouvre si on est dans le créneau.
+- Compte à rebours actualisé par le scheduler dans le même message.
+- Nettoyage : session active ou tous les messages suivis, rapport des échecs, alerte si médias non supprimés.
+- Crowdfunding : texte + image + bouton Je participe + PV + montant + capture + validation admin + barre de progression.
+- Publicités : plusieurs pubs texte/image, liste, envoi aléatoire quand groupe ouvert.
+- Grâce présidentielle/ministérielle : compte les personnes concernées et demande confirmation.
+- Ouverture manuelle en Auto OFF : sécurité 2h + demande admin + fermeture si pas de réponse.
+- VIP : message groupe avec 3 boutons, clic en PV, paiement/capture/validation.
 
-1. Créer un bot via BotFather.
-2. Créer PostgreSQL sur Railway.
-3. Ajouter les variables d'environnement depuis `.env.example`.
-4. `DATABASE_URL` peut rester celui de Railway (`postgresql://...`), le code le convertit en async automatiquement.
-5. Ajouter le bot admin du groupe principal avec droits : supprimer, bannir, restreindre, gérer liens, modifier permissions.
-6. Lancer le service Railway.
+Important : Telegram ne permet au bot de supprimer que les messages qu’il a vus depuis qu’il tourne et uniquement si le bot est admin avec le droit Supprimer les messages.
 
-## Variables minimales
+## Variables Railway
 
-```env
-BOT_TOKEN=...
-DATABASE_URL=...
-ADMIN_IDS=123456789
-TRUSTED_IDS=
+BOT_TOKEN=
+DATABASE_URL=
+ADMIN_IDS=5296696302
+TRUSTED_IDS=296696302
 MAIN_GROUP_ID=-100...
+PASS_SOIREE_GROUP_ID=
+PASS_TOTAL_GROUP_ID=
+VIP_JAVANA_GROUP_ID=
+LOG_GROUP_ID=
+PUBLIC_BOT_USERNAME=
+DEFAULT_VOTE_GOAL=120
+DEFAULT_TIME_SLOT=22:30-00:45
+AUTO_SCHEDULE_ENABLED=true
 TIMEZONE=Europe/Paris
-```
-
-Les groupes VIP peuvent être vides : fonctionnement partiel.
-
-## État honnête V4
-
-Cette version implémente le coeur opérationnel :
-- message statut unique édité ;
-- votes ;
-- auto ON/OFF ;
-- ouverture/fermeture ;
-- nettoyage des messages suivis ;
-- panel admin branché ;
-- santé ;
-- modération de base ;
-- trusted commands ;
-- VIP/paiement admin ;
-- crowdfunding avec capture et validation ;
-- rediffusion copyMessage vers Pass soirée/Pass total ;
-- scheduler ;
-- anti-raccordement pirate ;
-- rapports ;
-- tracking erreurs.
-
-Limites Telegram importantes :
-- un bot ne peut pas relire tout l'historique passé. Il nettoie les messages qu'il voit depuis son lancement.
-- retirer tous les membres d'un groupe nécessite qu'ils soient connus par le bot via événements ou commandes ; Telegram ne fournit pas une liste complète via Bot API.
-- pHash réel image/vidéo nécessite téléchargement et traitement média ; cette V4 utilise `file_unique_id` Telegram pour une détection exacte. Le moteur perceptuel doit être ajouté avec Pillow/OpenCV si nécessaire.
-
+PAYPAL_TEXT=
+REVOLUT_TEXT=
+CRYPTO_TEXT=
