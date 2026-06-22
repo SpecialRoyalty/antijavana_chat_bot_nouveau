@@ -24,17 +24,8 @@ async def tick(bot:Bot):
         await set_group_open(bot,False,'auto')
 async def run_justice_now(bot:Bot):
     if not await st.is_open(): return
-    from app.services.session_ops import CLOSED_PERMS, OPEN_PERMS
-    s=get_settings()
-    try: await bot.set_chat_permissions(s.main_group_id, permissions=CLOSED_PERMS)
-    except Exception: pass
-    await bot.send_message(s.main_group_id,'⚖️ JUSTICE POPULAIRE\n\nLe groupe est bloqué pendant 5 minutes.\n\nDes membres profitent du groupe sans participer.\nLes plus inactifs sont supprimés.')
-    # V1 fiable: annonce + blocage. Suppression d’inactifs connus se fait uniquement si le bot connaît les membres.
-    import asyncio
-    await asyncio.sleep(300)
-    try: await bot.set_chat_permissions(s.main_group_id, permissions=OPEN_PERMS)
-    except Exception: pass
-    await bot.send_message(s.main_group_id,'🟢 JUSTICE TERMINÉE\n\nLe groupe est de nouveau ouvert.')
+    from app.services.justice import execute_justice
+    await execute_justice(bot, manual=False)
 
 async def justice_tick(bot:Bot):
     if not await st.is_open(): return
@@ -44,17 +35,23 @@ async def justice_tick(bot:Bot):
     if abs((n-mt).total_seconds())<70:
         await st.set_value('justice_done_'+n.strftime('%Y%m%d'),'true')
         await run_justice_now(bot)
-async def rules_tick(bot:Bot):
-    if not await st.is_open(): return
+async def rules_tick(bot:Bot, force:bool=False):
+    if not force and not await st.is_open(): return
     s=get_settings(); old=await st.get_value('rules_message_id','')
     try:
         if old: await bot.delete_message(s.main_group_id,int(old))
     except Exception: pass
     m=await bot.send_message(s.main_group_id, await st.get_value('rules_text','Règles'))
     await st.set_value('rules_message_id',str(m.message_id))
+    from datetime import datetime
+    await st.set_value('last_rules_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
 async def top_tick(bot:Bot):
     if not await st.is_open(): return
-    s=get_settings(); await bot.send_message(s.main_group_id, await top_text())
+    s=get_settings(); txt=await top_text()
+    if 'Aucune statistique' in txt: return
+    await bot.send_message(s.main_group_id, txt)
+    from datetime import datetime
+    await st.set_value('last_top_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
 def start_scheduler(bot:Bot):
     sch=AsyncIOScheduler(timezone=get_settings().timezone)
     sch.add_job(lambda: tick(bot),'interval',minutes=1, id='tick')
