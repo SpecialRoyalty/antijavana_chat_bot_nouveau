@@ -20,8 +20,8 @@ async def list_ads_text():
     if not ads: return '📢 Aucune publicité configurée.'
     return '📢 Publicités configurées\n\n'+'\n'.join([f'#{a.id} — {"active" if a.active else "off"} — {(a.text or "[image]")[:60]}' for a in ads])
 
-async def send_random_ad(bot:Bot):
-    if not await st.is_open(): return None
+async def send_random_ad(bot:Bot, force:bool=False):
+    if not force and not await st.is_open(): return None
     async with SessionLocal() as db:
         res=await db.execute(select(Advertisement).where(Advertisement.active==True))
         ads=list(res.scalars().all())
@@ -35,4 +35,13 @@ async def send_random_ad(bot:Bot):
     else:
         m=await bot.send_message(s.main_group_id,ad.text or '📢 Publicité',reply_markup=kb)
     await track(s.main_group_id,m.message_id,None,'ad',bool(ad.image_file_id))
+    from datetime import datetime
+    await st.set_value('last_ad_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+    await st.set_value('last_ad_message_id', str(m.message_id))
     return m.message_id
+
+async def ads_health_text():
+    last=await st.get_value('last_ad_sent_at','jamais')
+    mid=await st.get_value('last_ad_message_id','-')
+    state='ouvert' if await st.is_open() else 'fermé'
+    return f'📢 Publicités\n\nGroupe : {state}\nDernier envoi : {last}\nDernier message ID : {mid}\nProchain envoi automatique : pendant ouverture selon planning.\nVérification fermeture : le rapport de nettoyage confirme si la pub suivie a été supprimée.'

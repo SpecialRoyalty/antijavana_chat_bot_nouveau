@@ -20,8 +20,8 @@ async def get_campaign():
         if not c:
             c=Crowdfunding(text='🎯 FINANCEMENT COMMUNAUTAIRE'); db.add(c); await db.commit()
         return c
-async def send_crowd_ad(bot:Bot):
-    if not await st.is_open(): return
+async def send_crowd_ad(bot:Bot, force:bool=False):
+    if not force and not await st.is_open(): return None
     c=await get_campaign(); s=get_settings()
     text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
     kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
@@ -32,6 +32,10 @@ async def send_crowd_ad(bot:Bot):
     else:
         m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
         await track(s.main_group_id,m.message_id,None,'crowdfunding',False)
+    from datetime import datetime
+    await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+    await st.set_value('last_crowd_message_id', str(m.message_id))
+    return m.message_id
 async def start_crowd_private(bot:Bot, user_id:int):
     c=await get_campaign()
     await bot.send_message(user_id, f'💰 Participation\n\nObjectif actuel : {c.current_amount}€ / {c.target_amount}€\n\nRéponds avec le montant que tu veux envoyer.')
@@ -87,3 +91,10 @@ async def set_campaign_image(file_id:str):
 async def stats_text():
     c=await get_campaign()
     return f'💰 Crowdfunding\n\nMontant : {c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}\nImage : {"OK" if c.image_file_id else "non configurée"}'
+
+async def crowd_health_text():
+    c=await get_campaign()
+    last=await st.get_value('last_crowd_sent_at','jamais')
+    mid=await st.get_value('last_crowd_message_id','-')
+    state='ouvert' if await st.is_open() else 'fermé'
+    return f'💰 Crowdfunding\n\nGroupe : {state}\nDernier envoi : {last}\nDernier message ID : {mid}\nProgression : {c.current_amount}€ / {c.target_amount}€\n{bar(c.current_amount,c.target_amount)}\nProchain envoi automatique : pendant ouverture selon planning.'

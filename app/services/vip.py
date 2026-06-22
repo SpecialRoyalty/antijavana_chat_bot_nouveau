@@ -11,12 +11,16 @@ from app.services.session_ops import notify_admins
 from app.services.state import track, log_error
 
 OFFER_NAMES={'soiree':'🎟 Pass soirée','total':'📦 Pass total','javana':'💎 COPIE 1:1 VIP JAVANA -50%'}
-async def send_vip_ad(bot:Bot):
+async def send_vip_ad(bot:Bot, force:bool=False):
     s=get_settings()
-    if not await st.is_open(): return
+    if not force and not await st.is_open(): return None
     text=await st.get_value('vip_text','💎 ACCÈS VIP\n\nChoisissez une offre.')
     m=await bot.send_message(s.main_group_id,text,reply_markup=vip_kb())
     await track(s.main_group_id,m.message_id,None,'vip_ad',False)
+    from datetime import datetime
+    await st.set_value('last_vip_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+    await st.set_value('last_vip_message_id', str(m.message_id))
+    return m.message_id
 async def create_order(user_id:int, username:str, offer:str):
     async with SessionLocal() as db:
         order=VipOrder(user_id=user_id,username=username,offers=offer,status='selecting'); db.add(order); await db.commit(); return order.id
@@ -68,3 +72,10 @@ async def expire_pass_soiree(bot:Bot):
             except Exception: pass
         await db.commit()
     await notify_admins(bot,'🎟 Pass soirée expiré : nettoyage lancé. Retrait membres à faire sur membres connus/commandes validées.')
+
+
+async def vip_health_text():
+    last=await st.get_value('last_vip_sent_at','jamais')
+    mid=await st.get_value('last_vip_message_id','-')
+    state='ouvert' if await st.is_open() else 'fermé'
+    return f'💎 VIP\n\nGroupe : {state}\nDernier envoi : {last}\nDernier message ID : {mid}\nProchain envoi automatique : pendant ouverture selon planning.\nPass soirée/total actifs selon groupes configurés.'

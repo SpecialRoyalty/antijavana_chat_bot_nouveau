@@ -46,4 +46,11 @@ Messages suivis non supprimés: {tracked}
 Comptes suspects: {suspects}
 Paiements VIP en attente: {vip_pending}
 Erreurs loggées: {errors}
+
+Diffusions planifiées:
+Publicité — dernier envoi: {await st.get_value('last_ad_sent_at','jamais')} — prochain: automatique pendant ouverture
+Crowdfunding — dernier envoi: {await st.get_value('last_crowd_sent_at','jamais')} — prochain: automatique pendant ouverture
+VIP — dernier envoi: {await st.get_value('last_vip_sent_at','jamais')} — prochain: automatique pendant ouverture
+Règles — dernier envoi: {await st.get_value('last_rules_sent_at','jamais')} — prochain: toutes les 30 min si ouvert
+Top inviteurs — dernier envoi: {await st.get_value('last_top_sent_at','jamais')}
 '''
