@@ -1,46 +1,61 @@
 from __future__ import annotations
 from functools import lru_cache
+from typing import Optional, List
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def parse_ids(value: str | None) -> set[int]:
-    if not value:
-        return set()
-    return {int(x.strip()) for x in value.split(',') if x.strip()}
+def _empty_to_none(v):
+    if v == "" or v is None:
+        return None
+    return v
+
+
+def parse_ids(v) -> List[int]:
+    if v is None or v == "":
+        return []
+    if isinstance(v, list):
+        return [int(x) for x in v]
+    return [int(x.strip()) for x in str(v).split(",") if x.strip()]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file='.env', extra='ignore')
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     bot_token: str
     database_url: str
-    admin_ids: str = ''
-    trusted_ids: str = ''
-    main_group_id: int | None = None
-    pass_soiree_group_id: int | None = None
-    pass_total_group_id: int | None = None
-    vip_javana_group_id: int | None = None
-    log_group_id: int | None = None
-    public_bot_username: str = ''
-    default_vote_target: int = 120
-    timezone: str = 'Europe/Paris'
-    node_env: str = 'production'
+    admin_ids: List[int] = []
+    trusted_ids: List[int] = []
 
-    @field_validator('main_group_id', 'pass_soiree_group_id', 'pass_total_group_id', 'vip_javana_group_id', 'log_group_id', mode='before')
+    main_group_id: Optional[int] = None
+    pass_soiree_group_id: Optional[int] = None
+    pass_total_group_id: Optional[int] = None
+    vip_javana_group_id: Optional[int] = None
+    log_group_id: Optional[int] = None
+    public_bot_username: Optional[str] = None
+
+    default_vote_goal: int = 120
+    default_time_slot: str = "22:30-00:45"
+    auto_schedule_enabled: bool = True
+    timezone: str = "Europe/Paris"
+    paypal_text: Optional[str] = None
+    revolut_text: Optional[str] = None
+    crypto_text: Optional[str] = None
+    railway_environment: str = "production"
+
+    @field_validator("admin_ids", "trusted_ids", mode="before")
     @classmethod
-    def empty_string_to_none(cls, value):
-        if value == '' or value is None:
-            return None
-        return value
+    def _ids(cls, v):
+        return parse_ids(v)
+
+    @field_validator("main_group_id", "pass_soiree_group_id", "pass_total_group_id", "vip_javana_group_id", "log_group_id", mode="before")
+    @classmethod
+    def _optional_int(cls, v):
+        return _empty_to_none(v)
 
     @property
-    def admin_id_set(self) -> set[int]:
-        return parse_ids(self.admin_ids)
-
-    @property
-    def trusted_id_set(self) -> set[int]:
-        return parse_ids(self.trusted_ids) | self.admin_id_set
+    def all_trusted(self) -> set[int]:
+        return set(self.admin_ids) | set(self.trusted_ids)
 
 
 @lru_cache
