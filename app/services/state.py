@@ -55,7 +55,7 @@ async def status_text(chat_id:int):
         remaining=countdown_text(slot,s.timezone,achieved=True)
         if remaining == 'maintenant':
             return '🟢 OBJECTIF ATTEINT\n\nOuverture en cours...'
-        return f'🟡 OBJECTIF ATTEINT\n\nLe groupe ouvrira automatiquement à {opening}.\n\nOuverture dans : {remaining}\n\nObjectif :\n{votes} / {goal} votes ✅\n\nPréparez vos médias.\n\nActualisation : {update_bucket}'
+        return f'🟡 OBJECTIF ATTEINT\n\nLe groupe ouvrira automatiquement à {opening}.\n\nOuverture dans : {remaining}\n\nObjectif :\n{votes} / {goal} votes ✅\n\nPréparez vos médias.\n\nDernière actualisation : {update_bucket}'
     remaining=countdown_text(slot,s.timezone,achieved=False)
     return f'🔴 GROUPE FERMÉ\n\nOuverture prévue à {opening}.\nTemps restant : {remaining}\n\nObjectif :\n{votes} / {goal} votes\n\nIl manque encore {missing} votes.'
 
