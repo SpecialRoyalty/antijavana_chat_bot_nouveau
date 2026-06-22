@@ -59,6 +59,7 @@ async def execute_justice(bot:Bot, manual:bool=False):
     if not cs:
         return 0, 'Aucun membre justifiable détecté.'
     await mark_justice_done()
+    await st.set_value('justice_running','true')
     try: await bot.set_chat_permissions(s.main_group_id, permissions=CLOSED_PERMS)
     except Exception as e: await log_error('justice_permissions_close',e)
     try:
@@ -89,5 +90,6 @@ async def execute_justice(bot:Bot, manual:bool=False):
         await track(s.main_group_id, m2.message_id, None, 'justice', False)
     except Exception as e:
         await log_error('justice_end_message', e)
+    await st.set_value('justice_running','false')
     await notify_admins(bot, f'⚖️ Justice terminée. Membres supprimés : {removed}')
     return removed, f'Justice lancée. Membres supprimés : {removed}'
