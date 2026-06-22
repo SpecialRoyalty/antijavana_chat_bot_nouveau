@@ -1,48 +1,37 @@
-from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery
+from aiogram import Router, Bot, F
+from aiogram.types import Message, ChatMemberUpdated
 from app.config import get_settings
-from app.services.state import add_vote, vote_count, get_group_state, register_user
-from app.services.messages import ensure_status_message, safe_delete
-from app.services.moderation import moderate_message, log_trusted_action
-from app.services.session_manager import open_group
-
-router=Router(); settings=get_settings()
-
-@router.callback_query(F.data=='vote_open')
-async def vote_open(cb:CallbackQuery, bot:Bot):
-    if cb.message is None: return await cb.answer()
-    chat_id=cb.message.chat.id
-    await register_user(cb.from_user)
-    added=await add_vote(chat_id, cb.from_user.id)
-    st=await get_group_state(chat_id)
-    votes=await vote_count(chat_id)
-    if votes >= st.vote_goal and not st.is_open:
-        # if inside slot handled by scheduler; this is safe but opens immediately when clicked during slot in simple core
-        pass
-    await ensure_status_message(bot, chat_id)
-    await cb.answer('Vote pris en compte.' if added else 'Vote déjà compté.')
-
-@router.message(F.chat.type.in_({'group','supergroup'}))
-async def group_all(message:Message, bot:Bot):
-    # anti-pirate: if not configured group, warn and leave
-    if settings.main_group_id and message.chat.id != settings.main_group_id and message.from_user and message.from_user.id not in settings.admin_ids:
-        try: await message.answer('Tentative de raccordement pirate détectée 😭')
+from app.services.users import upsert_user
+from app.services.actions import trusted_command
+from app.services.moderation import moderate_message, text_has_word, ban
+from app.services.vip import copy_media_to_vip, handle_vip_proof
+from app.services.crowdfunding import handle_crowd_text, handle_crowd_proof
+from app.services.invites import on_join
+from app.services.state import track
+router=Router()
+@router.my_chat_member()
+async def bot_added(event:ChatMemberUpdated, bot:Bot):
+    s=get_settings()
+    if event.chat.id not in [s.main_group_id,s.pass_soiree_group_id,s.pass_total_group_id,s.vip_javana_group_id,s.log_group_id]:
+        for aid in s.admin_ids:
+            try: await bot.send_message(aid,f'🚨 Tentative de raccordement pirate\nGroupe: {event.chat.title} ({event.chat.id})')
+            except Exception: pass
+        try: await bot.send_message(event.chat.id,'Tentative de raccordement pirate détectée 😭')
         except Exception: pass
-        try: await bot.leave_chat(message.chat.id)
+        try: await bot.leave_chat(event.chat.id)
         except Exception: pass
+@router.chat_member()
+async def member_update(event:ChatMemberUpdated):
+    await on_join(event)
+@router.message()
+async def all_messages(msg:Message, bot:Bot):
+    if msg.from_user: await upsert_user(msg.from_user)
+    if msg.chat.type=='private':
+        if await handle_crowd_text(msg): return
+        if await handle_crowd_proof(bot,msg): return
+        if await handle_vip_proof(bot,msg): return
         return
-
-    # trusted commands
-    if message.text and message.text.startswith('/') and message.from_user and message.from_user.id in settings.all_trusted:
-        cmd=message.text.split()[0].lower()
-        if cmd in ['/supprime','/mineur','/pasfr','/pedo'] and message.reply_to_message:
-            target=message.reply_to_message
-            await safe_delete(bot, message.chat.id, target.message_id)
-            await safe_delete(bot, message.chat.id, message.message_id)
-            points={'/supprime':1,'/mineur':2,'/pasfr':2,'/pedo':5}[cmd]
-            await log_trusted_action(message.from_user.id, target.from_user.id if target.from_user else None, cmd, points)
-            if cmd=='/pedo' and target.from_user:
-                try: await bot.ban_chat_member(message.chat.id, target.from_user.id)
-                except Exception: pass
-            return
-    await moderate_message(bot, message)
+    if msg.text and await trusted_command(bot,msg): return
+    await moderate_message(bot,msg)
+    if msg.chat.id==get_settings().main_group_id:
+        await copy_media_to_vip(bot,msg)
