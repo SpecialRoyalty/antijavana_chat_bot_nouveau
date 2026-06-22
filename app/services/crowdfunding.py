@@ -25,12 +25,17 @@ async def send_crowd_ad(bot:Bot):
     c=await get_campaign(); s=get_settings()
     text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
     kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
-    m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
-    await track(s.main_group_id,m.message_id,None,'crowdfunding',False)
-async def start_crowd_private(msg:Message):
+    
+    if c.image_file_id:
+        m=await bot.send_photo(s.main_group_id,c.image_file_id,caption=text,reply_markup=kb)
+        await track(s.main_group_id,m.message_id,None,'crowdfunding',True)
+    else:
+        m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
+        await track(s.main_group_id,m.message_id,None,'crowdfunding',False)
+async def start_crowd_private(bot:Bot, user_id:int):
     c=await get_campaign()
-    await msg.answer(f'💰 Participation\n\nObjectif actuel : {c.current_amount}€ / {c.target_amount}€\n\nRéponds avec le montant que tu veux envoyer.')
-    await st.set_value(f'crowd_state:{msg.from_user.id}','amount')
+    await bot.send_message(user_id, f'💰 Participation\n\nObjectif actuel : {c.current_amount}€ / {c.target_amount}€\n\nRéponds avec le montant que tu veux envoyer.')
+    await st.set_value(f'crowd_state:{user_id}','amount')
 async def handle_crowd_text(msg:Message):
     state=await st.get_value(f'crowd_state:{msg.from_user.id}','')
     if state!='amount': return False
@@ -59,3 +64,26 @@ async def validate_crowd(bot:Bot,pid:int,ok:bool):
         await db.commit()
     await bot.send_message(p.user_id,'✅ Participation validée.' if ok else '❌ Participation refusée.')
     return 'OK'
+
+
+async def set_campaign_text(text:str):
+    async with SessionLocal() as db:
+        res=await db.execute(select(Crowdfunding).order_by(Crowdfunding.id.desc()).limit(1)); c=res.scalar_one_or_none()
+        if not c: c=Crowdfunding(); db.add(c)
+        c.text=text; await db.commit()
+
+async def set_campaign_target(amount:int):
+    async with SessionLocal() as db:
+        res=await db.execute(select(Crowdfunding).order_by(Crowdfunding.id.desc()).limit(1)); c=res.scalar_one_or_none()
+        if not c: c=Crowdfunding(); db.add(c)
+        c.target_amount=max(amount,1); await db.commit()
+
+async def set_campaign_image(file_id:str):
+    async with SessionLocal() as db:
+        res=await db.execute(select(Crowdfunding).order_by(Crowdfunding.id.desc()).limit(1)); c=res.scalar_one_or_none()
+        if not c: c=Crowdfunding(); db.add(c)
+        c.image_file_id=file_id; await db.commit()
+
+async def stats_text():
+    c=await get_campaign()
+    return f'💰 Crowdfunding\n\nMontant : {c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}\nImage : {"OK" if c.image_file_id else "non configurée"}'

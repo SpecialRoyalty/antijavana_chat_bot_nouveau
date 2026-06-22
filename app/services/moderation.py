@@ -33,10 +33,19 @@ async def restrict(bot:Bot, chat_id:int, user_id:int, days:int):
     until=datetime.utcnow()+timedelta(days=days)
     try:
         await bot.restrict_chat_member(chat_id,user_id,permissions={'can_send_messages':False},until_date=until)
+        async with SessionLocal() as db:
+            u=await db.get(User,user_id)
+            if u: u.is_restricted=True
+            await db.commit()
     except Exception as e: await log_error('restrict',e)
 async def ban(bot:Bot, chat_id:int, user_id:int):
     if await protected(user_id): return
-    try: await bot.ban_chat_member(chat_id,user_id)
+    try:
+        await bot.ban_chat_member(chat_id,user_id)
+        async with SessionLocal() as db:
+            u=await db.get(User,user_id)
+            if u: u.is_banned=True
+            await db.commit()
     except Exception as e: await log_error('ban',e)
 async def delete(bot:Bot,msg:Message):
     try: await bot.delete_message(msg.chat.id,msg.message_id)
