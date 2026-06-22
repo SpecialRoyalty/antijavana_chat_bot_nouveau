@@ -23,3 +23,9 @@ Le scheduler tourne chaque minute, mais le texte affiché reste stable :
 ## V16
 - Pass Soirée Gratuit : exclusions ajoutées. Impossible si Pass Total, VIP JAVANA ou Pass Soirée déjà acheté/réservé pour la session.
 - Compte à rebours objectif atteint : actualisation forcée aux paliers horaires via marqueur discret `Actualisation : HH:00`, puis minute par minute dans la dernière heure.
+
+
+## V17 scheduler fix
+- Correction critique APScheduler: les jobs async sont maintenant planifiés directement avec args=[bot], plus via lambda.
+- Le message statut est recalculé toutes les minutes et édité quand le texte change.
+- Le compte à rebours objectif atteint affiche Dernière actualisation par palier horaire/dernière heure.
