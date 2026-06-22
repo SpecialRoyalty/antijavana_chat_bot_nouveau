@@ -7,7 +7,7 @@ from app.services.session_ops import set_group_open, security_close_if_manual
 from app.services.vip import send_vip_ad, expire_pass_soiree, send_due_pass_soiree_links
 from app.services.crowdfunding import send_crowd_ad
 from app.services.ads import send_random_ad
-from app.services.invites import validate_invites, top_text
+from app.services.invites import validate_invites, top_text, send_invite_ad
 from app.utils.time import in_slot, mid_time, now_tz
 
 async def tick(bot:Bot):
@@ -62,6 +62,7 @@ def start_scheduler(bot:Bot):
     sch.add_job(lambda: send_crowd_ad(bot),'cron',hour='22,0',minute='55,15', id='crowd_ads')
     sch.add_job(lambda: send_random_ad(bot),'cron',hour='22,0',minute='45,5', id='random_ads')
     sch.add_job(lambda: top_tick(bot),'cron',hour='0',minute='40', id='top')
+    sch.add_job(lambda: send_invite_ad(bot),'cron',hour='23',minute='25', id='invite_ad')
     sch.add_job(lambda: security_close_if_manual(bot),'interval',minutes=5, id='security_close')
     sch.add_job(lambda: send_due_pass_soiree_links(bot),'cron',hour='23',minute='0', id='pass_soiree_release')
     sch.add_job(lambda: expire_pass_soiree(bot),'cron',hour='5',minute='0', id='expire_pass')
