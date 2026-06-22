@@ -32,15 +32,6 @@ async def add_vote(chat_id:int,user_id:int):
 async def status_text(chat_id:int):
     goal=await st.vote_goal(); votes=await vote_count(chat_id); slot=await st.time_slot(); s=get_settings()
     opening=slot.split('-')[0]; closing=slot.split('-')[1]
-    # Marqueur discret pour forcer une édition visible aux paliers horaires
-    # quand le texte principal resterait identique pendant longtemps.
-    from app.utils.time import minutes_to_open, now_tz
-    mins_to_open = minutes_to_open(slot, s.timezone)
-    n_local = now_tz(s.timezone)
-    if mins_to_open > 60:
-        update_bucket = n_local.strftime('%H:00')
-    else:
-        update_bucket = n_local.strftime('%H:%M')
     if not await st.auto_enabled():
         if await st.is_open():
             return '🟢 GROUPE OUVERT\n\nVous pouvez envoyer vos médias <3\n\nMode manuel : fermeture de sécurité active.'
@@ -55,7 +46,7 @@ async def status_text(chat_id:int):
         remaining=countdown_text(slot,s.timezone,achieved=True)
         if remaining == 'maintenant':
             return '🟢 OBJECTIF ATTEINT\n\nOuverture en cours...'
-        return f'🟡 OBJECTIF ATTEINT\n\nLe groupe ouvrira automatiquement à {opening}.\n\nOuverture dans : {remaining}\n\nObjectif :\n{votes} / {goal} votes ✅\n\nPréparez vos médias.\n\nDernière actualisation : {update_bucket}'
+        return f'🟡 OBJECTIF ATTEINT\n\nLe groupe ouvrira automatiquement à {opening}.\n\nOuverture dans : {remaining}\n\nObjectif :\n{votes} / {goal} votes ✅\n\nPréparez vos médias.'
     remaining=countdown_text(slot,s.timezone,achieved=False)
     return f'🔴 GROUPE FERMÉ\n\nOuverture prévue à {opening}.\nTemps restant : {remaining}\n\nObjectif :\n{votes} / {goal} votes\n\nIl manque encore {missing} votes.'
 
