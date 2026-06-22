@@ -49,3 +49,9 @@ Limites Telegram importantes :
 - retirer tous les membres d'un groupe nécessite qu'ils soient connus par le bot via événements ou commandes ; Telegram ne fournit pas une liste complète via Bot API.
 - pHash réel image/vidéo nécessite téléchargement et traitement média ; cette V4 utilise `file_unique_id` Telegram pour une détection exacte. Le moteur perceptuel doit être ajouté avec Pillow/OpenCV si nécessaire.
 
+
+## V7 additions
+- Publicités: liste en boutons, gestion par pub, activation/désactivation, suppression.
+- Une pub = texte + image optionnelle. Si aucune image: texte seul.
+- VIP: texte principal configurable + image principale configurable.
+- VIP: textes détaillés des 3 offres configurables depuis le panel.
