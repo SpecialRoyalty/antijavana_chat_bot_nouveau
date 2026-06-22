@@ -129,3 +129,12 @@ def confirm_kb(action:str):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='✅ Confirmer', callback_data=f'confirm:{action}'), InlineKeyboardButton(text='❌ Annuler', callback_data='adm_dashboard')]
     ])
+
+
+def invite_admin_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='📤 Publier maintenant', callback_data='invite_send'), InlineKeyboardButton(text='🩺 Vérifier invitations', callback_data='invite_health')],
+        [InlineKeyboardButton(text='📝 Modifier texte', callback_data='await:invite_text'), InlineKeyboardButton(text='🖼 Modifier image', callback_data='await:invite_image')],
+        [InlineKeyboardButton(text='🎁 Voir paliers', callback_data='invite_tiers'), InlineKeyboardButton(text='✏️ Modifier paliers', callback_data='await:invite_tiers')],
+        [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
+    ])
