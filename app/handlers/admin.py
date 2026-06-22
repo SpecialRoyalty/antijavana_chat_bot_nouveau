@@ -11,7 +11,7 @@ from app.services.health import health_text
 from app.services.vip import send_vip_ad, validate_vip, vip_health_text
 from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text
 from app.services.invites import top_text
-from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text
+from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad
 from app.db.session import SessionLocal
 from app.db.models import WordRule
 from app.services.justice import justice_preview_text, execute_justice
@@ -88,6 +88,11 @@ async def await_input(cb:CallbackQuery):
         'crowd_image':'Envoie l’image crowdfunding.',
         'ad_text':'Envoie le texte de la publicité.',
         'ad_image':'Envoie l’image de la publicité avec texte en légende si besoin.',
+        'vip_text':'Envoie le texte principal du message VIP.',
+        'vip_image':'Envoie l’image principale du message VIP.',
+        'vip_offer_text:soiree':'Envoie le texte détaillé du Pass soirée.',
+        'vip_offer_text:total':'Envoie le texte détaillé du Pass total.',
+        'vip_offer_text:javana':'Envoie le texte détaillé de COPIE 1:1 VIP JAVANA -50%.',
         'hash_ban_media':'Envoie le média à bannir par hash. Le bot l’ajoutera en amont.',
     }
     await cb.message.answer('✍️ '+prompts.get(state,'Envoie la valeur.'))
@@ -134,7 +139,32 @@ async def cb_ad_health(cb:CallbackQuery):
 
 @router.callback_query(F.data=='ad_list')
 async def cb_ad_list(cb:CallbackQuery):
-    if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await list_ads_text()); await cb.answer()
+    if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await list_ads_text(), reply_markup=await ads_list_kb()); await cb.answer()
+
+@router.callback_query(F.data.startswith('ad_manage:'))
+async def cb_ad_manage(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    ad_id=int(cb.data.split(':')[1])
+    txt,kb=await ad_detail(ad_id)
+    await cb.message.answer(txt, reply_markup=kb)
+    await cb.answer()
+
+@router.callback_query(F.data.startswith('ad_toggle:'))
+async def cb_ad_toggle(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    ad_id=int(cb.data.split(':')[1])
+    ok=await toggle_ad(ad_id)
+    txt,kb=await ad_detail(ad_id)
+    await cb.message.answer(txt if ok else 'Pub introuvable.', reply_markup=kb)
+    await cb.answer()
+
+@router.callback_query(F.data.startswith('ad_delete:'))
+async def cb_ad_delete(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    ad_id=int(cb.data.split(':')[1])
+    ok=await delete_ad(ad_id)
+    await cb.message.answer('🗑 Pub supprimée.' if ok else 'Pub introuvable.', reply_markup=await ads_list_kb())
+    await cb.answer()
 @router.callback_query(F.data=='mod_lists')
 async def cb_mod_lists(cb:CallbackQuery):
     if not cb.from_user or not is_admin(cb.from_user.id): return
@@ -218,6 +248,19 @@ async def admin_text_state(msg:Message, bot:Bot):
     elif state=='ad_image':
         if msg.photo: await add_ad(text=msg.caption or '',image_file_id=msg.photo[-1].file_id); await msg.answer('✅ Publicité image ajoutée.',reply_markup=ads_admin_kb())
         else: await msg.answer('Envoie une image.') ; return
+    elif state=='vip_text':
+        await st.set_value('vip_text', msg.text or '')
+        await msg.answer('✅ Texte VIP principal sauvegardé.', reply_markup=vip_admin_kb())
+    elif state=='vip_image':
+        if msg.photo:
+            await st.set_value('vip_image_file_id', msg.photo[-1].file_id)
+            await msg.answer('✅ Image VIP principale sauvegardée.', reply_markup=vip_admin_kb())
+        else:
+            await msg.answer('Envoie une image.') ; return
+    elif state.startswith('vip_offer_text:'):
+        offer=state.split(':',1)[1]
+        await st.set_value(f'vip_offer_{offer}_text', msg.text or '')
+        await msg.answer('✅ Texte de l’offre VIP sauvegardé.', reply_markup=vip_admin_kb())
     elif state=='hash_ban_media':
         n=await ban_hash_from_message(msg)
         if n: await msg.answer(f'✅ Hash ban ajouté : {n} média(s).', reply_markup=hashban_kb())
