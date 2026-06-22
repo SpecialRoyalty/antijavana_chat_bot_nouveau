@@ -1,7 +1,7 @@
 from __future__ import annotations
 from functools import lru_cache
 from typing import Optional, List
-from pydantic import field_validator
+from pydantic import field_validator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,8 +24,8 @@ class Settings(BaseSettings):
 
     bot_token: str
     database_url: str
-    admin_ids: List[int] = []
-    trusted_ids: List[int] = []
+    admin_ids_csv: str = Field(default="", validation_alias="ADMIN_IDS")
+    trusted_ids_csv: str = Field(default="", validation_alias="TRUSTED_IDS")
 
     main_group_id: Optional[int] = None
     pass_soiree_group_id: Optional[int] = None
@@ -43,15 +43,18 @@ class Settings(BaseSettings):
     crypto_text: Optional[str] = None
     railway_environment: str = "production"
 
-    @field_validator("admin_ids", "trusted_ids", mode="before")
-    @classmethod
-    def _ids(cls, v):
-        return parse_ids(v)
-
     @field_validator("main_group_id", "pass_soiree_group_id", "pass_total_group_id", "vip_javana_group_id", "log_group_id", mode="before")
     @classmethod
     def _optional_int(cls, v):
         return _empty_to_none(v)
+
+    @property
+    def admin_ids(self) -> List[int]:
+        return parse_ids(self.admin_ids_csv)
+
+    @property
+    def trusted_ids(self) -> List[int]:
+        return parse_ids(self.trusted_ids_csv)
 
     @property
     def all_trusted(self) -> set[int]:
