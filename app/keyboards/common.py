@@ -62,6 +62,7 @@ def mod_kb():
 def crowd_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📤 Publier maintenant',callback_data='crowd_send'), InlineKeyboardButton(text='🩺 Vérifier diffusion',callback_data='crowd_health')],
+        [InlineKeyboardButton(text='📋 Gérer campagnes',callback_data='crowd_list'), InlineKeyboardButton(text='➕ Nouvelle campagne',callback_data='crowd_new')],
         [InlineKeyboardButton(text='📝 Modifier texte',callback_data='await:crowd_text'),InlineKeyboardButton(text='🎯 Modifier objectif',callback_data='await:crowd_target')],
         [InlineKeyboardButton(text='🖼 Modifier image',callback_data='await:crowd_image'),InlineKeyboardButton(text='📊 Stats',callback_data='crowd_stats')],
         [InlineKeyboardButton(text='⬅️ Retour',callback_data='adm_dashboard')]
@@ -110,9 +111,9 @@ def vip_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📤 Publier VIP maintenant', callback_data='vip_send')],
         [InlineKeyboardButton(text='📝 Modifier texte principal', callback_data='await:vip_text'), InlineKeyboardButton(text='🖼 Modifier image principale', callback_data='await:vip_image')],
-        [InlineKeyboardButton(text='🎟 Texte Pass soirée', callback_data='await:vip_offer_text:soiree')],
-        [InlineKeyboardButton(text='📦 Texte Pass total', callback_data='await:vip_offer_text:total')],
-        [InlineKeyboardButton(text='💎 Texte JAVANA', callback_data='await:vip_offer_text:javana')],
+        [InlineKeyboardButton(text='🎟 Texte Pass soirée', callback_data='await:vip_offer_text:soiree'), InlineKeyboardButton(text='💶 Prix soirée', callback_data='await:vip_price:soiree')],
+        [InlineKeyboardButton(text='📦 Texte Pass total', callback_data='await:vip_offer_text:total'), InlineKeyboardButton(text='💶 Prix total', callback_data='await:vip_price:total')],
+        [InlineKeyboardButton(text='💎 Texte JAVANA', callback_data='await:vip_offer_text:javana'), InlineKeyboardButton(text='💶 Prix JAVANA', callback_data='await:vip_price:javana')],
         [InlineKeyboardButton(text='🩺 Vérifier diffusion', callback_data='vip_health')],
         [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
     ])
