@@ -151,3 +151,17 @@ class Advertisement(Base):
     button_url: Mapped[str|None]=mapped_column(Text, nullable=True)
     active: Mapped[bool]=mapped_column(Boolean, default=True)
     created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
+
+class VipAccess(Base):
+    __tablename__='vip_accesses'
+    id: Mapped[int]=mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int]=mapped_column(Integer, index=True)
+    user_id: Mapped[int]=mapped_column(BigInteger, index=True)
+    username: Mapped[str]=mapped_column(String(255), default='')
+    offer: Mapped[str]=mapped_column(String(30), index=True)  # soiree,total,javana
+    group_id: Mapped[int|None]=mapped_column(BigInteger, nullable=True)
+    invite_link: Mapped[str|None]=mapped_column(Text, nullable=True)
+    invite_sent_at: Mapped[datetime|None]=mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime|None]=mapped_column(DateTime, nullable=True)
+    status: Mapped[str]=mapped_column(String(30), default='pending')  # pending, active, expired, failed
+    created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
