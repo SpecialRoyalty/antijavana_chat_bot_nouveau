@@ -8,13 +8,15 @@ from app.services import settings as st
 from app.services.session_ops import set_group_open, cleanup_session, count_known_bans_and_restrictions, presidential_pardon, ministerial_pardon
 from app.services.state import ensure_status_message
 from app.services.health import health_text
-from app.services.vip import send_vip_ad, validate_vip, vip_health_text
-from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text
+from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private
+from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private
 from app.services.invites import top_text
 from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad
 from app.db.session import SessionLocal
 from app.db.models import WordRule
 from app.services.justice import justice_preview_text, execute_justice
+import asyncio
+from aiogram.exceptions import TelegramBadRequest
 from app.services.hashban import ban_hash_from_message, banned_hash_count
 router=Router()
 
@@ -24,11 +26,22 @@ async def get_admin_state(uid:int): return await st.get_value(f'admin_state:{uid
 async def clear_admin_state(uid:int): await st.set_value(f'admin_state:{uid}','')
 
 @router.message(CommandStart())
-async def start(msg:Message):
-    if msg.chat.type=='private' and msg.from_user and is_admin(msg.from_user.id):
-        await msg.answer('Panel admin',reply_markup=admin_kb())
-    elif msg.chat.type=='private':
-        await msg.answer('Bot actif.')
+async def start(msg:Message, bot:Bot):
+    arg=''
+    if msg.text and len(msg.text.split(maxsplit=1))>1:
+        arg=msg.text.split(maxsplit=1)[1].strip()
+    if msg.chat.type=='private' and msg.from_user:
+        if arg.startswith('vip_'):
+            offer=arg.split('_',1)[1]
+            await send_vip_private(bot, msg.from_user.id, offer if offer in ['soiree','total','javana'] else None)
+            return
+        if arg=='crowd':
+            await start_crowd_private(bot, msg.from_user.id)
+            return
+        if is_admin(msg.from_user.id):
+            await msg.answer('Panel admin',reply_markup=admin_kb())
+        else:
+            await msg.answer('Bot actif.')
 
 @router.callback_query(F.data.startswith('adm_'))
 async def admin_cb(cb:CallbackQuery, bot:Bot):
@@ -93,6 +106,9 @@ async def await_input(cb:CallbackQuery):
         'vip_offer_text:soiree':'Envoie le texte détaillé du Pass soirée.',
         'vip_offer_text:total':'Envoie le texte détaillé du Pass total.',
         'vip_offer_text:javana':'Envoie le texte détaillé de COPIE 1:1 VIP JAVANA -50%.',
+        'vip_price:soiree':'Envoie le prix du Pass soirée en nombre.',
+        'vip_price:total':'Envoie le prix du Pass total en nombre.',
+        'vip_price:javana':'Envoie le prix de COPIE 1:1 VIP JAVANA -50% en nombre.',
         'hash_ban_media':'Envoie le média à bannir par hash. Le bot l’ajoutera en amont.',
     }
     await cb.message.answer('✍️ '+prompts.get(state,'Envoie la valeur.'))
@@ -126,6 +142,27 @@ async def cb_crowd_send(cb:CallbackQuery, bot:Bot):
 @router.callback_query(F.data=='crowd_health')
 async def cb_crowd_health(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await crowd_health_text()); await cb.answer()
+
+@router.callback_query(F.data=='crowd_new')
+async def cb_crowd_new(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        ok,msg=await create_campaign()
+        await cb.message.answer(msg, reply_markup=crowd_admin_kb())
+        await cb.answer()
+
+@router.callback_query(F.data=='crowd_list')
+async def cb_crowd_list(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        await cb.message.answer(await campaigns_text(), reply_markup=crowd_admin_kb())
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('crowd_active:'))
+async def cb_crowd_active(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        cid=int(cb.data.split(':')[1]); await set_active_campaign(cid)
+        await cb.message.answer('✅ Campagne active changée.', reply_markup=crowd_admin_kb())
+        await cb.answer()
+
 @router.callback_query(F.data=='crowd_stats')
 async def cb_crowd_stats(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await stats_text()); await cb.answer()
@@ -216,9 +253,17 @@ async def cb_confirm(cb:CallbackQuery, bot:Bot):
     if action=='pardon_ban': n=await presidential_pardon(bot); await cb.message.answer(f'👑 Grâce présidentielle exécutée.\nBannis débannis : {n}')
     elif action=='pardon_mute': n=await ministerial_pardon(bot); await cb.message.answer(f'⚖️ Grâce ministérielle exécutée.\nRestrictions levées : {n}')
     elif action=='justice_run':
-        removed,msg=await execute_justice(bot, manual=True)
-        await cb.message.answer(msg)
-    await cb.answer()
+        try:
+            await cb.answer('Justice lancée ✅')
+        except TelegramBadRequest:
+            pass
+        await cb.message.answer('⚖️ Justice lancée. Le groupe sera bloqué 5 minutes.')
+        asyncio.create_task(execute_justice(bot, manual=True))
+        return
+    try:
+        await cb.answer()
+    except TelegramBadRequest:
+        pass
 
 @router.message(F.chat.type=='private')
 async def admin_text_state(msg:Message, bot:Bot):
@@ -261,8 +306,13 @@ async def admin_text_state(msg:Message, bot:Bot):
         offer=state.split(':',1)[1]
         await st.set_value(f'vip_offer_{offer}_text', msg.text or '')
         await msg.answer('✅ Texte de l’offre VIP sauvegardé.', reply_markup=vip_admin_kb())
+    elif state.startswith('vip_price:'):
+        offer=state.split(':',1)[1]
+        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
+        await st.set_value(f'vip_price_{offer}', str(n))
+        await msg.answer(f'✅ Prix VIP sauvegardé : {n}€', reply_markup=vip_admin_kb())
     elif state=='hash_ban_media':
-        n=await ban_hash_from_message(msg)
+        n=await ban_hash_from_message(msg, bot)
         if n: await msg.answer(f'✅ Hash ban ajouté : {n} média(s).', reply_markup=hashban_kb())
         else:
             await msg.answer('Envoie une photo/vidéo/document à bannir par hash.')

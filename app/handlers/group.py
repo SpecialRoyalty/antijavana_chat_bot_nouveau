@@ -21,8 +21,8 @@ async def bot_added(event:ChatMemberUpdated, bot:Bot):
         try: await bot.leave_chat(event.chat.id)
         except Exception: pass
 @router.chat_member()
-async def member_update(event:ChatMemberUpdated):
-    await on_join(event)
+async def member_update(event:ChatMemberUpdated, bot:Bot):
+    await on_join(event, bot)
 @router.message()
 async def all_messages(msg:Message, bot:Bot):
     if msg.from_user: await upsert_user(msg.from_user)
