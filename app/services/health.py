@@ -55,4 +55,5 @@ Crowdfunding — dernier envoi: {await st.get_value('last_crowd_sent_at','jamais
 VIP — dernier envoi: {await st.get_value('last_vip_sent_at','jamais')} — prochain: automatique pendant ouverture
 Règles — dernier envoi: {await st.get_value('last_rules_sent_at','jamais')} — prochain: toutes les 30 min si ouvert
 Top inviteurs — dernier envoi: {await st.get_value('last_top_sent_at','jamais')}
+Pass gratuit — statut: {await st.get_value('free_pass_enabled','false')} — dernier envoi: {await st.get_value('last_free_pass_sent_at','jamais')}
 '''

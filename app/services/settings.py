@@ -15,7 +15,7 @@ async def set_value(key:str, value:str):
         await db.commit()
 async def init_defaults():
     s=get_settings()
-    defaults={'auto_enabled':str(s.auto_schedule_enabled).lower(),'time_slot':s.default_time_slot,'vote_goal':str(s.default_vote_goal),'group_open':'false','status_message_id':'','active_session_id':'0','rules_text':'Respectez les règles. Pas de liens, pas de mentions, pas de commandes.','vip_text':'💎 ACCÈS VIP\n\nChoisissez une offre pour obtenir plus d’informations.','crowd_text':'🎯 FINANCEMENT COMMUNAUTAIRE','ads_text':'📢 Publicité','weekly_top_started':'false','weekly_top_start':'','manual_security_warned_at':'','manual_opened_at':''}
+    defaults={'auto_enabled':str(s.auto_schedule_enabled).lower(),'time_slot':s.default_time_slot,'vote_goal':str(s.default_vote_goal),'group_open':'false','status_message_id':'','active_session_id':'0','rules_text':'Respectez les règles. Pas de liens, pas de mentions, pas de commandes.','vip_text':'💎 ACCÈS VIP\n\nChoisissez une offre pour obtenir plus d’informations.','crowd_text':'🎯 FINANCEMENT COMMUNAUTAIRE','ads_text':'📢 Publicité','weekly_top_started':'false','weekly_top_start':'','manual_security_warned_at':'','manual_opened_at':'','free_pass_enabled':'false','free_pass_places':'20','free_pass_cooldown_days':'30','free_pass_min_media':'3','free_pass_min_invites':'0','free_pass_message_id':''}
     for k,v in defaults.items():
         if await get_value(k,'')=='': await set_value(k,v)
 async def is_open(): return (await get_value('group_open','false'))=='true'
