@@ -9,6 +9,7 @@ from app.db.session import SessionLocal
 from app.db.models import WordRule, MediaHash, TrustedAction, User
 from app.services.users import protected, display_name
 from app.services.state import track, log_error
+from app.services.hashban import file_sha256
 from app.services import settings as st
 
 def has_link(text:str): return bool(re.search(r'(https?://|t\.me/|www\.|\.com\b|\.net\b|\.io\b)', text or '', re.I))
@@ -62,8 +63,12 @@ async def record_media(msg:Message, banned=False):
             if u and not banned:
                 u.media_count+=1; u.last_media_session=int(await st.get_value('active_session_id','0') or '0')
             await db.commit()
-async def contains_banned_hash(msg:Message):
-    ids=[x[0] for x in file_ids(msg)]
+async def contains_banned_hash(bot:Bot,msg:Message):
+    entries=file_ids(msg)
+    ids=[x[0] for x in entries]
+    for _unique,file_id,_typ in entries:
+        sha=await file_sha256(bot,file_id)
+        if sha: ids.append(sha)
     if not ids: return False
     async with SessionLocal() as db:
         res=await db.execute(select(MediaHash).where(MediaHash.file_unique_id.in_(ids),MediaHash.banned==True))
@@ -77,7 +82,7 @@ async def moderate_message(bot:Bot,msg:Message):
     if not await st.is_open() and not (trusted or admin):
         await delete(bot,msg); return
     if is_media(msg):
-        if await contains_banned_hash(msg):
+        if await contains_banned_hash(bot,msg):
             await delete(bot,msg); await ban(bot,msg.chat.id,uid); return
         await record_media(msg)
     # Liens interdits pour tout le monde sauf admins; trusted supprimé sans sanction

@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, func
 from aiogram import Bot
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from app.config import get_settings
@@ -14,12 +14,41 @@ def bar(cur:int,target:int):
     full=int(pct*10)
     return '█'*full+'░'*(10-full)+f' {int(pct*100)}%'
 async def get_campaign():
+    active_id=int(await st.get_value('active_crowd_id','0') or '0')
     async with SessionLocal() as db:
-        res=await db.execute(select(Crowdfunding).order_by(Crowdfunding.id.desc()).limit(1))
-        c=res.scalar_one_or_none()
+        c=None
+        if active_id:
+            c=await db.get(Crowdfunding, active_id)
         if not c:
-            c=Crowdfunding(text='🎯 FINANCEMENT COMMUNAUTAIRE'); db.add(c); await db.commit()
+            res=await db.execute(select(Crowdfunding).order_by(Crowdfunding.id.asc()).limit(1))
+            c=res.scalar_one_or_none()
+        if not c:
+            c=Crowdfunding(text='🎯 FINANCEMENT COMMUNAUTAIRE'); db.add(c); await db.flush(); await st.set_value('active_crowd_id', str(c.id)); await db.commit()
         return c
+
+async def create_campaign():
+    async with SessionLocal() as db:
+        count=int((await db.execute(select(func.count(Crowdfunding.id)))).scalar() or 0)
+        if count>=2: return False, 'Maximum 2 campagnes crowdfunding à la fois.'
+        c=Crowdfunding(text='🎯 FINANCEMENT COMMUNAUTAIRE', target_amount=1000, active=True); db.add(c); await db.flush(); cid=c.id; await db.commit()
+    await st.set_value('active_crowd_id', str(cid))
+    return True, f'✅ Campagne créée et activée : #{cid}'
+
+async def set_active_campaign(cid:int):
+    await st.set_value('active_crowd_id', str(cid))
+
+async def campaigns_text():
+    active_id=await st.get_value('active_crowd_id','0')
+    async with SessionLocal() as db:
+        res=await db.execute(select(Crowdfunding).order_by(Crowdfunding.id.asc()))
+        rows=list(res.scalars().all())
+    if not rows: return 'Aucune campagne.'
+    lines=['💰 Campagnes crowdfunding']
+    for c in rows:
+        mark='✅ active' if str(c.id)==str(active_id) else 'inactive'
+        lines.append(f'#{c.id} — {mark} — {c.current_amount}€/{c.target_amount}€ — image: {"OK" if c.image_file_id else "non"}')
+    lines.append('\nPour changer active: bouton à venir / ou crée une nouvelle campagne.')
+    return '\n'.join(lines)
 async def send_crowd_ad(bot:Bot, force:bool=False):
     if not force and not await st.is_open(): return None
     c=await get_campaign(); s=get_settings()

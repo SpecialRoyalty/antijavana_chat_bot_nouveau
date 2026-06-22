@@ -6,12 +6,20 @@ from app.db.session import SessionLocal
 from app.db.models import User, InviteLink
 from app.services.users import upsert_user
 from app.config import get_settings
+from app.services.moderation import text_has_word
+from app.services.state import log_error
 
 JOIN_CACHE: dict[int, tuple[int|None, datetime]] = {}
-async def on_join(event:ChatMemberUpdated):
+async def on_join(event:ChatMemberUpdated, bot:Bot|None=None):
     if not event.new_chat_member or event.new_chat_member.status not in ('member','restricted'): return
     u=await upsert_user(event.from_user)
-    # Telegram invite_link disponible selon update
+    name=((event.from_user.username or '')+' '+(event.from_user.full_name or '')).strip()
+    if bot and await text_has_word('nameban', name):
+        try:
+            await bot.ban_chat_member(event.chat.id, event.from_user.id)
+            u.is_banned=True
+        except Exception as e: await log_error('nameban_join', e)
+        return
     owner=None
     JOIN_CACHE[event.from_user.id]=(owner, datetime.utcnow())
 async def validate_invites(bot:Bot):
