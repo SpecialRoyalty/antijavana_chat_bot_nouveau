@@ -1,37 +1,49 @@
-from __future__ import annotations
+from sqlalchemy import select, func
 from aiogram import Bot
-from sqlalchemy import text as sqltext
 from app.config import get_settings
 from app.db.session import SessionLocal
-from app.services.state import get_group_state
-from app.utils.time import next_open_close
+from app.db.models import ErrorLog, TrackedMessage, User, VipOrder, Vote
+from app.services import settings as st
+from app.utils.time import mid_time, slot_times, next_open_text
 
-settings=get_settings()
-
-async def health_report(bot:Bot) -> str:
-    db_ok=False; tg_ok=False
-    try:
-        async with SessionLocal() as db:
-            await db.execute(sqltext('select 1'))
-            db_ok=True
-    except Exception: db_ok=False
-    try:
-        me=await bot.get_me(); tg_ok=bool(me.id)
-    except Exception: tg_ok=False
-    st = await get_group_state(settings.main_group_id) if settings.main_group_id else None
-    groups = [
-        ('Groupe principal', settings.main_group_id),
-        ('Pass soirée', settings.pass_soiree_group_id),
-        ('Pass total', settings.pass_total_group_id),
-        ('VIP JAVANA', settings.vip_javana_group_id),
-        ('Logs', settings.log_group_id),
-    ]
-    mode = '🟢 Fonctionnement total' if all(gid for _,gid in groups[:4]) else '🟡 Fonctionnement partiel'
-    lines=[f'{mode}\n', f'Telegram API : {"OK" if tg_ok else "KO"}', f'PostgreSQL : {"OK" if db_ok else "KO"}']
-    if st:
-        start,end=next_open_close(st.time_slot, settings.timezone)
-        lines += [f'Auto : {"ON" if st.auto_enabled else "OFF"}', f'Groupe ouvert : {"OUI" if st.is_open else "NON"}', f'Prochaine ouverture : {start.strftime("%H:%M")}', f'Prochaine fermeture : {end.strftime("%H:%M")}']
-    lines += ['\nGroupes :']
+async def health_text(bot:Bot):
+    s=get_settings(); slot=await st.time_slot(); start,end=slot_times(slot,s.timezone)
+    groups=[('Principal',s.main_group_id),('Pass soirée',s.pass_soiree_group_id),('Pass total',s.pass_total_group_id),('VIP JAVANA',s.vip_javana_group_id),('Logs',s.log_group_id)]
+    group_lines=[]; missing=[]
     for name,gid in groups:
-        lines.append(f'- {name} : {"OK" if gid else "non configuré"}')
-    return '\n'.join(lines)
+        if not gid:
+            group_lines.append(f'{name}: non configuré'); missing.append(name); continue
+        try:
+            me=await bot.get_me(); member=await bot.get_chat_member(gid,me.id)
+            group_lines.append(f'{name}: OK ({member.status})')
+        except Exception:
+            group_lines.append(f'{name}: ERREUR')
+    async with SessionLocal() as db:
+        errors=(await db.execute(select(func.count(ErrorLog.id)))).scalar() or 0
+        tracked=(await db.execute(select(func.count(TrackedMessage.id)).where(TrackedMessage.deleted==False))).scalar() or 0
+        suspects=(await db.execute(select(func.count(User.id)).where(User.suspect_score>=50))).scalar() or 0
+        vip_pending=(await db.execute(select(func.count(VipOrder.id)).where(VipOrder.status=='pending'))).scalar() or 0
+    mode='🟢 Fonctionnement total' if not missing else '🟡 Fonctionnement partiel sans modules manquants'
+    return f'''{mode}
+
+Bot: OK
+PostgreSQL: OK
+Scheduler: OK
+
+Session:
+Auto: {'ON' if await st.auto_enabled() else 'OFF'}
+Ouvert: {'OUI' if await st.is_open() else 'NON'}
+Créneau: {slot}
+Prochaine ouverture: {next_open_text(slot,s.timezone)}
+Prochaine justice: {mid_time(slot,s.timezone).strftime('%H:%M')}
+Prochaine fermeture: {end.strftime('%H:%M')}
+
+Groupes:
+{chr(10).join(group_lines)}
+
+Contrôles:
+Messages suivis non supprimés: {tracked}
+Comptes suspects: {suspects}
+Paiements VIP en attente: {vip_pending}
+Erreurs loggées: {errors}
+'''
