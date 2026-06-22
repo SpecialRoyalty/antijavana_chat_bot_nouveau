@@ -6,6 +6,7 @@ from app.services.state import ensure_status_message, vote_count
 from app.services.session_ops import set_group_open, security_close_if_manual
 from app.services.vip import send_vip_ad, expire_pass_soiree
 from app.services.crowdfunding import send_crowd_ad
+from app.services.ads import send_random_ad
 from app.services.invites import validate_invites, top_text
 from app.utils.time import in_slot, mid_time, now_tz
 
@@ -21,6 +22,20 @@ async def tick(bot:Bot):
         await set_group_open(bot,True,'auto')
     if not ins and open_:
         await set_group_open(bot,False,'auto')
+async def run_justice_now(bot:Bot):
+    if not await st.is_open(): return
+    from app.services.session_ops import CLOSED_PERMS, OPEN_PERMS
+    s=get_settings()
+    try: await bot.set_chat_permissions(s.main_group_id, permissions=CLOSED_PERMS)
+    except Exception: pass
+    await bot.send_message(s.main_group_id,'⚖️ JUSTICE POPULAIRE\n\nLe groupe est bloqué pendant 5 minutes.\n\nDes membres profitent du groupe sans participer.\nLes plus inactifs sont supprimés.')
+    # V1 fiable: annonce + blocage. Suppression d’inactifs connus se fait uniquement si le bot connaît les membres.
+    import asyncio
+    await asyncio.sleep(300)
+    try: await bot.set_chat_permissions(s.main_group_id, permissions=OPEN_PERMS)
+    except Exception: pass
+    await bot.send_message(s.main_group_id,'🟢 JUSTICE TERMINÉE\n\nLe groupe est de nouveau ouvert.')
+
 async def justice_tick(bot:Bot):
     if not await st.is_open(): return
     s=get_settings(); mt=mid_time(await st.time_slot(),s.timezone); n=now_tz(s.timezone)
@@ -28,9 +43,7 @@ async def justice_tick(bot:Bot):
     if done=='true': return
     if abs((n-mt).total_seconds())<70:
         await st.set_value('justice_done_'+n.strftime('%Y%m%d'),'true')
-        m=await bot.send_message(s.main_group_id,'⚖️ JUSTICE POPULAIRE\n\nLe groupe est bloqué pendant 5 minutes.\n\nDes membres profitent du groupe sans participer.\nLes plus inactifs sont supprimés.')
-        # suppression réelle d'inactifs limitée/sécurisée : à gérer avec membres connus seulement
-        await bot.send_message(s.main_group_id,'🟢 JUSTICE TERMINÉE\n\nLe groupe est de nouveau ouvert.')
+        await run_justice_now(bot)
 async def rules_tick(bot:Bot):
     if not await st.is_open(): return
     s=get_settings(); old=await st.get_value('rules_message_id','')
@@ -50,7 +63,8 @@ def start_scheduler(bot:Bot):
     sch.add_job(lambda: rules_tick(bot),'interval',minutes=30, id='rules')
     sch.add_job(lambda: send_vip_ad(bot),'cron',hour='22,0',minute='50,10', id='vip_ads')
     sch.add_job(lambda: send_crowd_ad(bot),'cron',hour='22,0',minute='55,15', id='crowd_ads')
+    sch.add_job(lambda: send_random_ad(bot),'cron',hour='22,0',minute='45,5', id='random_ads')
     sch.add_job(lambda: top_tick(bot),'cron',hour='0',minute='40', id='top')
-    sch.add_job(lambda: security_close_if_manual(bot),'interval',hours=2, id='security_close')
+    sch.add_job(lambda: security_close_if_manual(bot),'interval',minutes=5, id='security_close')
     sch.add_job(lambda: expire_pass_soiree(bot),'cron',hour='5',minute='45', id='expire_pass')
     sch.start(); return sch
