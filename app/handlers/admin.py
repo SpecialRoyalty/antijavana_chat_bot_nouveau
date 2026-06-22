@@ -18,6 +18,7 @@ from app.services.justice import justice_preview_text, execute_justice
 import asyncio
 from aiogram.exceptions import TelegramBadRequest
 from app.services.hashban import ban_hash_from_message, banned_hash_count
+from app.services.freepass import free_pass_admin_kb, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
@@ -61,6 +62,7 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     elif d=='adm_cleanup': await cb.message.answer('🧹 Nettoyage\n\nSi les médias ne se suppriment pas, vérifie que le bot est admin avec droit de suppression.',reply_markup=cleanup_kb())
     elif d=='adm_suspects': await cb.message.answer('🕵️ Comptes suspects\n\nScore 50+ visible admin\n80+ invitation en attente\n100+ rejetée\n\nBoutons de suppression par score à ajouter après volume réel.',reply_markup=back_kb())
     elif d=='adm_vip': await cb.message.answer('💎 VIP\n\nPublication manuelle pour test + suivi santé.',reply_markup=vip_admin_kb())
+    elif d=='adm_freepass': await cb.message.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
     elif d=='adm_crowd': await cb.message.answer('💰 Crowdfunding',reply_markup=crowd_admin_kb())
     elif d=='adm_ads': await cb.message.answer('📢 Publicités',reply_markup=ads_admin_kb())
     elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nTexte + image + bouton Recevoir vidéos. Validation après 5 min, paliers GoFile, compteurs total/récompense.',reply_markup=invite_admin_kb())
@@ -116,6 +118,10 @@ async def await_input(cb:CallbackQuery):
         'invite_text':'Envoie le texte du message invitations.',
         'invite_image':'Envoie l’image du message invitations.',
         'invite_tiers':'Envoie les paliers, une ligne par palier : 1|Label|Lien GoFile',
+        'freepass_places':'Envoie le nombre de places gratuites.',
+        'freepass_cooldown':'Envoie le cooldown en jours.',
+        'freepass_media':'Envoie le nombre minimum de médias requis.',
+        'freepass_invites':'Envoie le nombre minimum d’invités validés requis.',
     }
     await cb.message.answer('✍️ '+prompts.get(state,'Envoie la valeur.'))
     await cb.answer()
@@ -291,6 +297,35 @@ async def cb_top_health(cb:CallbackQuery):
 async def cb_hashban_stats(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(f'🚫 Hash bannis : {await banned_hash_count()}'); await cb.answer()
 
+
+@router.callback_query(F.data=='freepass_toggle')
+async def cb_freepass_toggle(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    cur=(await st.get_value('free_pass_enabled','false'))=='true'
+    await st.set_value('free_pass_enabled','false' if cur else 'true')
+    await cb.message.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+    await cb.answer('Pass gratuit: ' + ('OFF' if cur else 'ON'))
+
+@router.callback_query(F.data=='freepass_publish')
+async def cb_freepass_publish(cb:CallbackQuery, bot:Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    mid=await publish_free_pass(bot)
+    await cb.message.answer('🎟 Offre gratuite publiée.' if mid else 'Offre gratuite inactive. Active-la d’abord.', reply_markup=free_pass_admin_kb())
+    await cb.answer()
+
+@router.callback_query(F.data=='freepass_beneficiaries')
+async def cb_freepass_beneficiaries(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    await cb.message.answer(await freepass_beneficiaries_text(), reply_markup=free_pass_admin_kb())
+    await cb.answer()
+
+@router.callback_query(F.data=='freepass_reset')
+async def cb_freepass_reset(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    n=await freepass_reset_current()
+    await cb.message.answer(f'🔄 Réservations en attente annulées pour cette session : {n}', reply_markup=free_pass_admin_kb())
+    await cb.answer()
+
 @router.callback_query(F.data.startswith('confirm:'))
 async def cb_confirm(cb:CallbackQuery, bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
@@ -402,6 +437,22 @@ async def admin_text_state(msg:Message, bot:Bot):
     elif state=='invite_tiers':
         ok=await set_tiers_from_text(msg.text or '')
         await msg.answer('✅ Paliers sauvegardés.' if ok else 'Format invalide. Exemple : 1|1 vidéo|https://gofile...', reply_markup=invite_admin_kb())
+    elif state=='freepass_places':
+        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
+        if n>0: await st.set_value('free_pass_places',str(n))
+        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+    elif state=='freepass_cooldown':
+        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
+        if n>=0: await st.set_value('free_pass_cooldown_days',str(n))
+        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+    elif state=='freepass_media':
+        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
+        await st.set_value('free_pass_min_media',str(n))
+        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+    elif state=='freepass_invites':
+        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
+        await st.set_value('free_pass_min_invites',str(n))
+        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
     elif state=='hash_ban_media':
         n=await ban_hash_from_message(msg, bot)
         if n: await msg.answer(f'✅ Hash ban ajouté : {n} média(s).', reply_markup=hashban_kb())

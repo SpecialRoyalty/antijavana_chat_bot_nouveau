@@ -10,6 +10,7 @@ from app.services.vip import send_vip_private, toggle_cart, user_cart, vip_menu_
 from app.services.crowdfunding import start_crowd_private, handle_crowd_text, handle_crowd_proof
 from app.services.invites import send_invite_private
 from app.services.vip import handle_vip_proof
+from app.services.freepass import reserve_free_pass, refresh_free_pass_message
 router=Router()
 
 async def dm_or_deeplink(cb:CallbackQuery, bot:Bot, offer:str):
@@ -83,6 +84,21 @@ async def invite_private(cb:CallbackQuery, bot:Bot):
         username=get_settings().public_bot_username.strip().lstrip('@')
         if username: await cb.answer(url=f'https://t.me/{username}?start=invite')
         else: await cb.answer('Démarre le bot en privé puis reclique.', show_alert=True)
+
+
+@router.callback_query(F.data=='freepass_reserve')
+async def freepass_reserve_cb(cb:CallbackQuery, bot:Bot):
+    username=cb.from_user.username or cb.from_user.full_name or ''
+    ok,msg=await reserve_free_pass(bot, cb.from_user.id, username)
+    if ok:
+        try:
+            await bot.send_message(cb.from_user.id, msg)
+        except Exception:
+            pass
+        await refresh_free_pass_message(bot)
+        await cb.answer('Place réservée ✅', show_alert=True)
+    else:
+        await cb.answer(msg, show_alert=True)
 
 @router.callback_query(F.data.startswith('vip_pay:') | F.data.startswith('crowd_pay:'))
 async def paynoop(cb:CallbackQuery):
