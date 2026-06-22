@@ -1,57 +1,16 @@
-# Telegram Railway Bot V4
+# Telegram Railway Bot V8 — corrections test
 
-Version Python/Aiogram pour Railway + PostgreSQL.
+Corrections principales:
+- Justice populaire: exclut bot/admin/trusted, max 1 fois par session, preview + validation, plus de timeout callback.
+- Hash ban: ajout anticipé en privé, détection par `file_unique_id` + SHA256 téléchargé pour tests plus fiables.
+- VIP: boutons du groupe en deep-link vers le bot privé; menu privé avec panier, changement d'offres, checkout, prix configurables.
+- Crowdfunding: gestion jusqu'à 2 campagnes, campagne active, texte/image/objectif, publication maintenant, barre de progression.
+- Name ban: contrôle au join.
+- Logs d'erreur conservés en base.
 
-## Déploiement Railway
+Variables importantes:
+- PUBLIC_BOT_USERNAME doit être rempli sans @ pour que les boutons VIP/Crowdfunding ouvrent directement le bot en privé.
+- Le bot doit être admin du groupe principal et des groupes VIP avec droits suppression/ban/restriction/invitations.
 
-1. Créer un bot via BotFather.
-2. Créer PostgreSQL sur Railway.
-3. Ajouter les variables d'environnement depuis `.env.example`.
-4. `DATABASE_URL` peut rester celui de Railway (`postgresql://...`), le code le convertit en async automatiquement.
-5. Ajouter le bot admin du groupe principal avec droits : supprimer, bannir, restreindre, gérer liens, modifier permissions.
-6. Lancer le service Railway.
-
-## Variables minimales
-
-```env
-BOT_TOKEN=...
-DATABASE_URL=...
-ADMIN_IDS=123456789
-TRUSTED_IDS=
-MAIN_GROUP_ID=-100...
-TIMEZONE=Europe/Paris
-```
-
-Les groupes VIP peuvent être vides : fonctionnement partiel.
-
-## État honnête V4
-
-Cette version implémente le coeur opérationnel :
-- message statut unique édité ;
-- votes ;
-- auto ON/OFF ;
-- ouverture/fermeture ;
-- nettoyage des messages suivis ;
-- panel admin branché ;
-- santé ;
-- modération de base ;
-- trusted commands ;
-- VIP/paiement admin ;
-- crowdfunding avec capture et validation ;
-- rediffusion copyMessage vers Pass soirée/Pass total ;
-- scheduler ;
-- anti-raccordement pirate ;
-- rapports ;
-- tracking erreurs.
-
-Limites Telegram importantes :
-- un bot ne peut pas relire tout l'historique passé. Il nettoie les messages qu'il voit depuis son lancement.
-- retirer tous les membres d'un groupe nécessite qu'ils soient connus par le bot via événements ou commandes ; Telegram ne fournit pas une liste complète via Bot API.
-- pHash réel image/vidéo nécessite téléchargement et traitement média ; cette V4 utilise `file_unique_id` Telegram pour une détection exacte. Le moteur perceptuel doit être ajouté avec Pillow/OpenCV si nécessaire.
-
-
-## V7 additions
-- Publicités: liste en boutons, gestion par pub, activation/désactivation, suppression.
-- Une pub = texte + image optionnelle. Si aucune image: texte seul.
-- VIP: texte principal configurable + image principale configurable.
-- VIP: textes détaillés des 3 offres configurables depuis le panel.
+Note Telegram:
+- Un bot ne peut pas forcer une discussion privée silencieusement si l'utilisateur ne l'a jamais démarré. Le deep-link ouvre directement le bot avec l'offre sélectionnée.
