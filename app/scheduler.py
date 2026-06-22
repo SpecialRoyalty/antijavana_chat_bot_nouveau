@@ -13,7 +13,7 @@ from app.utils.time import in_slot, mid_time, now_tz
 
 async def tick(bot:Bot):
     s=get_settings(); chat=s.main_group_id
-    await ensure_status_message(bot,chat)
+    await ensure_status_message(bot,chat,recreate_on_change=True)
     if not await st.auto_enabled():
         return
     ins=in_slot(await st.time_slot(),s.timezone)
