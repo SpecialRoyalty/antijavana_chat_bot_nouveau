@@ -312,12 +312,23 @@ async def cb_confirm(cb:CallbackQuery, bot:Bot):
 
 @router.message(F.chat.type=='private')
 async def admin_text_state(msg:Message, bot:Bot):
-    if not msg.from_user or not is_admin(msg.from_user.id): return
-    # Priorité aux parcours utilisateur en cours, même si l'utilisateur est admin.
-    # Sinon un ancien état admin peut bloquer crowdfunding/VIP.
+    # IMPORTANT V13 : ce handler est dans le router admin, chargé avant les autres routers.
+    # Il doit donc traiter les parcours privés pour TOUS les utilisateurs, pas seulement admins.
+    # Sinon les users non-admin restent bloqués après avoir envoyé le montant crowdfunding
+    # ou la capture VIP, parce que ce handler intercepte le message puis return.
+    if not msg.from_user:
+        return
+
+    # Priorité absolue aux parcours utilisateur en cours.
+    # Marche pour admin, trusted, random, et comptes de test.
     if await handle_crowd_text(msg): return
     if await handle_crowd_proof(bot,msg): return
     if await handle_vip_proof(bot,msg): return
+
+    # La suite est réservée aux admins pour les états de configuration.
+    if not is_admin(msg.from_user.id):
+        return
+
     state=await get_admin_state(msg.from_user.id)
     if not state:
         return
