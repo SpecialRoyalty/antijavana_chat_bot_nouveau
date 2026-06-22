@@ -1,57 +1,41 @@
 from __future__ import annotations
+from datetime import timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram import Bot
 from app.config import get_settings
-from app.services.session_service import ensure_status_message, open_main_group, close_main_group, get_runtime_settings, get_or_create_session
-from app.services.vip import send_vip_ad
-from app.services.cleanup import notify_admins
-from app.services.reports import session_report
+from app.services.state import get_group_state, vote_count
+from app.services.messages import ensure_status_message
+from app.services.session_manager import open_group, close_group, notify_admins
+from app.utils.time import in_slot, next_open_close, now_tz
 
-settings = get_settings()
+settings=get_settings()
+scheduler = AsyncIOScheduler(timezone=settings.timezone)
 
-
-def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone=settings.timezone)
-    scheduler.add_job(lambda: guarded_status(bot), 'interval', minutes=60, id='status_closed_hourly', replace_existing=True, max_instances=1)
-    scheduler.add_job(lambda: guarded_open(bot), 'cron', hour=22, minute=30, id='auto_open_2230', replace_existing=True, max_instances=1)
-    scheduler.add_job(lambda: guarded_vip(bot), 'cron', hour=22, minute=50, id='vip_ad_1', replace_existing=True, max_instances=1)
-    scheduler.add_job(lambda: guarded_vip(bot), 'cron', hour=0, minute=10, id='vip_ad_2', replace_existing=True, max_instances=1)
-    scheduler.add_job(lambda: notify_admins(bot, '⚖️ Justice populaire : vérification milieu de session active.'), 'cron', hour=23, minute=37, id='justice', replace_existing=True, max_instances=1)
-    scheduler.add_job(lambda: close_and_report(bot), 'cron', hour=0, minute=45, id='auto_close', replace_existing=True, max_instances=1)
-    scheduler.add_job(lambda: manual_safety(bot), 'interval', minutes=5, id='manual_safety', replace_existing=True, max_instances=1)
-    return scheduler
-
-
-async def guarded_status(bot: Bot) -> None:
-    await ensure_status_message(bot)
-
-
-async def guarded_open(bot: Bot) -> None:
-    runtime = await get_runtime_settings()
-    if not runtime.get('auto_enabled', True):
-        await ensure_status_message(bot)
+async def tick(bot:Bot):
+    chat_id=settings.main_group_id
+    if not chat_id: return
+    st=await get_group_state(chat_id)
+    # Always ensure one status message is updated.
+    await ensure_status_message(bot, chat_id)
+    inside=in_slot(st.time_slot, settings.timezone)
+    if not st.auto_enabled:
         return
-    # TODO: scheduler dynamique pour autres créneaux. Défaut actif: 22:30-00:45.
-    s = await get_or_create_session()
-    votes = 999999  # En V1 de stabilité: ouverture auto ne bloque pas si objectif non câblé dans ce job.
-    if s.status != 'open':
-        await open_main_group(bot, manual=False)
+    votes=await vote_count(chat_id)
+    if inside and not st.is_open and votes >= st.vote_goal:
+        await open_group(bot, chat_id, kind='auto')
+    if (not inside) and st.is_open and not st.manual_open:
+        await close_group(bot, chat_id, reason='auto')
+    if st.is_open and st.manual_open and st.auto_enabled:
+        # Auto ON dominates official closure.
+        _,end=next_open_close(st.time_slot, settings.timezone)
+        if now_tz(settings.timezone) >= end:
+            await close_group(bot, chat_id, reason='auto_after_manual')
 
+async def safety_tick(bot:Bot):
+    # Placeholder: manual Auto OFF 2h confirmation belongs in advanced job table.
+    pass
 
-async def guarded_vip(bot: Bot) -> None:
-    s = await get_or_create_session()
-    if s.status == 'open':
-        await send_vip_ad(bot)
-
-
-async def close_and_report(bot: Bot) -> None:
-    await close_main_group(bot, reason='auto')
-    await notify_admins(bot, await session_report())
-
-
-async def manual_safety(bot: Bot) -> None:
-    # Sécurité simplifiée: si session manuelle ouverte, les admins sont rappelés.
-    s = await get_or_create_session()
-    if s.status == 'open' and s.mode == 'manual':
-        # La fermeture automatique stricte +2h sera branchée en V2 dynamique.
-        pass
+def start_scheduler(bot:Bot):
+    scheduler.add_job(tick, 'interval', minutes=1, args=[bot], id='main_tick', replace_existing=True)
+    scheduler.add_job(lambda: None, 'interval', minutes=30, id='heartbeat', replace_existing=True)
+    scheduler.start()
