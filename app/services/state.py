@@ -73,25 +73,55 @@ async def track(chat_id:int,message_id:int,user_id:int|None,kind='message',is_me
                     if is_media: sess.media_seen += 1
         await db.commit()
 
-async def ensure_status_message(bot:Bot, chat_id:int):
-    text=await status_text(chat_id); mid=await st.get_value('status_message_id','')
+async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=False):
+    """Maintient le message principal.
+
+    - Par défaut: édite le message existant, utile pour les votes instantanés.
+    - recreate_on_change=True: si le texte a changé depuis la dernière version,
+      supprime l'ancien message et en publie un nouveau. C'est utilisé par le
+      scheduler aux paliers de compte à rebours pour que l'heure Telegram visible
+      du message change vraiment.
+    """
+    text=await status_text(chat_id)
+    mid=await st.get_value('status_message_id','')
+    last_text=await st.get_value('status_last_text','')
     kb=None if await st.is_open() or not await st.auto_enabled() else vote_kb()
+
+    if mid and recreate_on_change and last_text and text != last_text:
+        try:
+            await bot.delete_message(chat_id,int(mid))
+            async with SessionLocal() as db:
+                res=await db.execute(select(TrackedMessage).where(TrackedMessage.chat_id==chat_id,TrackedMessage.message_id==int(mid)))
+                tm=res.scalar_one_or_none()
+                if tm: tm.deleted=True
+                await db.commit()
+        except Exception as e:
+            await log_error('delete_old_status',e)
+        mid=''
+
     if mid:
         try:
             await bot.edit_message_text(text, chat_id=chat_id, message_id=int(mid), reply_markup=kb)
             from datetime import datetime
             await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
+            await st.set_value('status_last_text', text)
             return int(mid)
         except TelegramBadRequest as e:
             low=str(e).lower()
-            if 'message is not modified' in low: return int(mid)
-            if 'message to edit not found' not in low: await log_error('edit_status',e)
-        except Exception as e: await log_error('edit_status',e)
+            if 'message is not modified' in low:
+                return int(mid)
+            if 'message to edit not found' not in low:
+                await log_error('edit_status',e)
+        except Exception as e:
+            await log_error('edit_status',e)
+
     m=await bot.send_message(chat_id,text,reply_markup=kb)
-    await st.set_value('status_message_id',str(m.message_id));
+    await st.set_value('status_message_id',str(m.message_id))
+    await st.set_value('status_last_text', text)
     from datetime import datetime
     await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
     await track(chat_id,m.message_id,None,'status',False)
+    await cleanup_known_status_duplicates(bot, chat_id)
     return m.message_id
 
 async def cleanup_known_status_duplicates(bot:Bot, chat_id:int):
