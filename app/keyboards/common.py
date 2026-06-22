@@ -109,6 +109,10 @@ def hashban_kb():
 def vip_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📤 Publier VIP maintenant', callback_data='vip_send')],
+        [InlineKeyboardButton(text='📝 Modifier texte principal', callback_data='await:vip_text'), InlineKeyboardButton(text='🖼 Modifier image principale', callback_data='await:vip_image')],
+        [InlineKeyboardButton(text='🎟 Texte Pass soirée', callback_data='await:vip_offer_text:soiree')],
+        [InlineKeyboardButton(text='📦 Texte Pass total', callback_data='await:vip_offer_text:total')],
+        [InlineKeyboardButton(text='💎 Texte JAVANA', callback_data='await:vip_offer_text:javana')],
         [InlineKeyboardButton(text='🩺 Vérifier diffusion', callback_data='vip_health')],
         [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
     ])
