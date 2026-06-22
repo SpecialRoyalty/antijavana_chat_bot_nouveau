@@ -8,10 +8,10 @@ from app.services import settings as st
 from app.services.session_ops import set_group_open, cleanup_session, count_known_bans_and_restrictions, presidential_pardon, ministerial_pardon
 from app.services.state import ensure_status_message
 from app.services.health import health_text
-from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private
-from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private
+from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private, handle_vip_proof
+from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private, campaigns_kb, campaign_detail, toggle_campaign, delete_campaign, handle_crowd_text, handle_crowd_proof
 from app.services.invites import top_text
-from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad
+from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad, set_ad_text, set_ad_image, send_ad_by_id
 from app.db.session import SessionLocal
 from app.db.models import WordRule
 from app.services.justice import justice_preview_text, execute_justice
@@ -153,7 +153,7 @@ async def cb_crowd_new(cb:CallbackQuery):
 @router.callback_query(F.data=='crowd_list')
 async def cb_crowd_list(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
-        await cb.message.answer(await campaigns_text(), reply_markup=crowd_admin_kb())
+        await cb.message.answer(await campaigns_text(), reply_markup=await campaigns_kb())
         await cb.answer()
 
 @router.callback_query(F.data.startswith('crowd_active:'))
@@ -161,6 +161,27 @@ async def cb_crowd_active(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
         cid=int(cb.data.split(':')[1]); await set_active_campaign(cid)
         await cb.message.answer('✅ Campagne active changée.', reply_markup=crowd_admin_kb())
+        await cb.answer()
+
+
+@router.callback_query(F.data.startswith('crowd_manage:'))
+async def cb_crowd_manage(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        cid=int(cb.data.split(':')[1]); txt,kb=await campaign_detail(cid)
+        await cb.message.answer(txt, reply_markup=kb); await cb.answer()
+
+@router.callback_query(F.data.startswith('crowd_toggle:'))
+async def cb_crowd_toggle(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        cid=int(cb.data.split(':')[1]); await toggle_campaign(cid)
+        txt,kb=await campaign_detail(cid)
+        await cb.message.answer(txt, reply_markup=kb); await cb.answer()
+
+@router.callback_query(F.data.startswith('crowd_delete:'))
+async def cb_crowd_delete(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        cid=int(cb.data.split(':')[1]); ok=await delete_campaign(cid)
+        await cb.message.answer('🗑 Campagne supprimée.' if ok else 'Campagne introuvable.', reply_markup=await campaigns_kb())
         await cb.answer()
 
 @router.callback_query(F.data=='crowd_stats')
@@ -184,6 +205,15 @@ async def cb_ad_manage(cb:CallbackQuery):
     ad_id=int(cb.data.split(':')[1])
     txt,kb=await ad_detail(ad_id)
     await cb.message.answer(txt, reply_markup=kb)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith('ad_send_one:'))
+async def cb_ad_send_one(cb:CallbackQuery, bot:Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    ad_id=int(cb.data.split(':')[1])
+    mid=await send_ad_by_id(bot, ad_id, force=True)
+    await cb.message.answer('📢 Pub publiée maintenant.' if mid else 'Pub introuvable ou erreur.')
     await cb.answer()
 
 @router.callback_query(F.data.startswith('ad_toggle:'))
@@ -269,7 +299,12 @@ async def cb_confirm(cb:CallbackQuery, bot:Bot):
 async def admin_text_state(msg:Message, bot:Bot):
     if not msg.from_user or not is_admin(msg.from_user.id): return
     state=await get_admin_state(msg.from_user.id)
-    if not state: return
+    if not state:
+        # Les admins sont aussi des utilisateurs pour VIP/crowdfunding : ne pas avaler leurs réponses.
+        if await handle_crowd_text(msg): return
+        if await handle_crowd_proof(bot,msg): return
+        if await handle_vip_proof(bot,msg): return
+        return
     if state=='goal':
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
         if n>0: await st.set_value('vote_goal',str(n)); await ensure_status_message(bot,get_settings().main_group_id); await msg.answer(f'✅ Objectif défini : {n}',reply_markup=admin_kb())
@@ -281,17 +316,34 @@ async def admin_text_state(msg:Message, bot:Bot):
             await msg.answer(f'✅ Ajouté dans {kind}: {word}',reply_markup=mod_kb())
     elif state=='rules_text':
         await st.set_value('rules_text',msg.text or ''); await msg.answer('✅ Règles sauvegardées.',reply_markup=admin_kb())
-    elif state=='crowd_text':
-        await set_campaign_text(msg.text or ''); await msg.answer('✅ Texte crowdfunding sauvegardé.',reply_markup=crowd_admin_kb())
-    elif state=='crowd_target':
-        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0'); await set_campaign_target(n); await msg.answer(f'✅ Objectif crowdfunding : {n}€',reply_markup=crowd_admin_kb())
-    elif state=='crowd_image':
-        if msg.photo: await set_campaign_image(msg.photo[-1].file_id); await msg.answer('✅ Image crowdfunding sauvegardée.',reply_markup=crowd_admin_kb())
+    elif state.startswith('crowd_text'):
+        cid=int(state.split(':')[1]) if ':' in state else None
+        await set_campaign_text(msg.text or '', cid); await msg.answer('✅ Texte crowdfunding sauvegardé.',reply_markup=crowd_admin_kb())
+    elif state.startswith('crowd_target'):
+        cid=int(state.split(':')[1]) if ':' in state else None
+        n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0'); await set_campaign_target(n, cid); await msg.answer(f'✅ Objectif crowdfunding : {n}€',reply_markup=crowd_admin_kb())
+    elif state.startswith('crowd_image'):
+        cid=int(state.split(':')[1]) if ':' in state else None
+        if msg.photo: await set_campaign_image(msg.photo[-1].file_id, cid); await msg.answer('✅ Image crowdfunding sauvegardée.',reply_markup=crowd_admin_kb())
         else: await msg.answer('Envoie une image.') ; return
+    elif state.startswith('ad_edit_text:'):
+        adid=int(state.split(':')[1])
+        ok=await set_ad_text(adid, msg.text or '')
+        await msg.answer('✅ Texte de la pub modifié.' if ok else 'Pub introuvable.', reply_markup=ads_admin_kb())
     elif state=='ad_text':
-        await add_ad(text=msg.text or ''); await msg.answer('✅ Publicité texte ajoutée.',reply_markup=ads_admin_kb())
+        adid=await add_ad(text=msg.text or '')
+        await msg.answer('✅ Publicité texte ajoutée.' if adid!=-1 else 'Maximum 2 publicités configurées. Supprime une pub avant d’en ajouter une autre.',reply_markup=ads_admin_kb())
+    elif state.startswith('ad_edit_image:'):
+        adid=int(state.split(':')[1])
+        if msg.photo:
+            ok=await set_ad_image(adid, msg.photo[-1].file_id)
+            await msg.answer('✅ Image de la pub modifiée.' if ok else 'Pub introuvable.', reply_markup=ads_admin_kb())
+        else:
+            await msg.answer('Envoie une image.') ; return
     elif state=='ad_image':
-        if msg.photo: await add_ad(text=msg.caption or '',image_file_id=msg.photo[-1].file_id); await msg.answer('✅ Publicité image ajoutée.',reply_markup=ads_admin_kb())
+        if msg.photo:
+            adid=await add_ad(text=msg.caption or '',image_file_id=msg.photo[-1].file_id)
+            await msg.answer('✅ Publicité image ajoutée.' if adid!=-1 else 'Maximum 2 publicités configurées. Supprime une pub avant d’en ajouter une autre.',reply_markup=ads_admin_kb())
         else: await msg.answer('Envoie une image.') ; return
     elif state=='vip_text':
         await st.set_value('vip_text', msg.text or '')

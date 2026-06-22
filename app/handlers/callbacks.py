@@ -73,4 +73,8 @@ async def crowd(cb:CallbackQuery, bot:Bot):
 
 @router.callback_query(F.data.startswith('vip_pay:') | F.data.startswith('crowd_pay:'))
 async def paynoop(cb:CallbackQuery):
-    await cb.answer('Envoie la capture ici après paiement.')
+    method=cb.data.split(':')[1]
+    s=get_settings()
+    info={'paypal':s.paypal_text or 'PayPal non configuré.', 'revolut':s.revolut_text or 'Revolut non configuré.', 'crypto':s.crypto_text or 'Crypto non configuré.'}.get(method,'')
+    await cb.message.answer(f'💳 {method.upper()}\n\n{info}\n\nAprès paiement, envoie une capture ici.')
+    await cb.answer('Instructions envoyées ✅')
