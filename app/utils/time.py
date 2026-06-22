@@ -28,16 +28,19 @@ def minutes_to_open(slot:str,tz:str)->int:
 
 def countdown_text(slot:str,tz:str, achieved:bool=False)->str:
     """Affichage stable du compte à rebours.
-    Objectif atteint: compte à rebours rituel heure par heure, puis 30/10/5/2/1.
-    Objectif non atteint: affichage plus précis pour pousser au vote.
+
+    IMPORTANT: cette fonction est volontairement stable entre deux paliers.
+    Le scheduler tourne chaque minute, mais le message ne doit changer qu'aux
+    vrais paliers: heure par heure, puis 30/10/5/2/1.
     """
     mins=minutes_to_open(slot,tz)
     if mins<=0: return 'maintenant'
     if achieved:
         if mins>60:
-            # ceil: à 5h32 restantes on affiche 6h, puis à l'heure suivante 5h, etc.
+            # Exemple: à 5h32 restantes on affiche 6h; à 4h59 restantes, 5h.
             return f'{math.ceil(mins/60)}h'
-        if mins>30: return 'moins de 1h'
+        # Dernière heure: ne pas afficher les minutes réelles, seulement les paliers.
+        if mins>30: return '1h'
         if mins>10: return '30 minutes'
         if mins>5: return '10 minutes'
         if mins>2: return '5 minutes'
