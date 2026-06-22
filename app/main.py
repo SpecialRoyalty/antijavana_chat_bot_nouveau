@@ -1,27 +1,24 @@
-from __future__ import annotations
 import asyncio, logging
 from aiogram import Bot, Dispatcher
 from app.config import get_settings
 from app.db.session import init_db
-from app.handlers.admin import router as admin_router
-from app.handlers.group import router as group_router
-from app.jobs.scheduler import start_scheduler
-from app.services.messages import ensure_status_message
-
-logging.basicConfig(level=logging.INFO)
-settings=get_settings()
+from app.services.settings import init_defaults
+from app.services.state import ensure_status_message, cleanup_known_status_duplicates
+from app.handlers import admin, callbacks, group
+from app.scheduler import start_scheduler
 
 async def main():
-    await init_db()
-    bot=Bot(settings.bot_token)
+    logging.basicConfig(level=logging.INFO)
+    s=get_settings()
+    await init_db(); await init_defaults()
+    bot=Bot(s.bot_token)
     dp=Dispatcher()
-    dp.include_router(admin_router)
-    dp.include_router(group_router)
+    dp.include_router(admin.router); dp.include_router(callbacks.router); dp.include_router(group.router)
     start_scheduler(bot)
-    if settings.main_group_id:
-        try: await ensure_status_message(bot, settings.main_group_id)
-        except Exception as e: logging.exception('status init failed: %s', e)
+    try:
+        await ensure_status_message(bot,s.main_group_id)
+        await cleanup_known_status_duplicates(bot,s.main_group_id)
+    except Exception as e:
+        logging.exception('status init failed')
     await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-
-if __name__ == '__main__':
-    asyncio.run(main())
+if __name__=='__main__': asyncio.run(main())
