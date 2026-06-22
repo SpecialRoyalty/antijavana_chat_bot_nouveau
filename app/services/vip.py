@@ -15,8 +15,12 @@ async def send_vip_ad(bot:Bot, force:bool=False):
     s=get_settings()
     if not force and not await st.is_open(): return None
     text=await st.get_value('vip_text','💎 ACCÈS VIP\n\nChoisissez une offre.')
-    m=await bot.send_message(s.main_group_id,text,reply_markup=vip_kb())
-    await track(s.main_group_id,m.message_id,None,'vip_ad',False)
+    image=await st.get_value('vip_image_file_id','')
+    if image:
+        m=await bot.send_photo(s.main_group_id,image,caption=text,reply_markup=vip_kb())
+    else:
+        m=await bot.send_message(s.main_group_id,text,reply_markup=vip_kb())
+    await track(s.main_group_id,m.message_id,None,'vip_ad',bool(image))
     from datetime import datetime
     await st.set_value('last_vip_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     await st.set_value('last_vip_message_id', str(m.message_id))
@@ -26,7 +30,9 @@ async def create_order(user_id:int, username:str, offer:str):
         order=VipOrder(user_id=user_id,username=username,offers=offer,status='selecting'); db.add(order); await db.commit(); return order.id
 async def payment_text(offer:str):
     s=get_settings()
-    return f'{OFFER_NAMES.get(offer,offer)}\n\nChoisissez le moyen de paiement.\n\nPayPal: {s.paypal_text or "à configurer"}\nRevolut: {s.revolut_text or "à configurer"}\nCrypto: {s.crypto_text or "à configurer"}\n\nAprès paiement, envoyez la capture ici.'
+    custom=await st.get_value(f'vip_offer_{offer}_text','')
+    intro=custom or OFFER_NAMES.get(offer,offer)
+    return f'{intro}\n\nChoisissez le moyen de paiement.\n\nPayPal: {s.paypal_text or "à configurer"}\nRevolut: {s.revolut_text or "à configurer"}\nCrypto: {s.crypto_text or "à configurer"}\n\nAprès paiement, envoyez la capture ici.'
 async def handle_vip_proof(bot:Bot,msg:Message):
     if not msg.photo: return False
     async with SessionLocal() as db:
@@ -77,5 +83,6 @@ async def expire_pass_soiree(bot:Bot):
 async def vip_health_text():
     last=await st.get_value('last_vip_sent_at','jamais')
     mid=await st.get_value('last_vip_message_id','-')
+    image='oui' if await st.get_value('vip_image_file_id','') else 'non'
     state='ouvert' if await st.is_open() else 'fermé'
-    return f'💎 VIP\n\nGroupe : {state}\nDernier envoi : {last}\nDernier message ID : {mid}\nProchain envoi automatique : pendant ouverture selon planning.\nPass soirée/total actifs selon groupes configurés.'
+    return f'💎 VIP\n\nGroupe : {state}\nImage principale configurée : {image}\nDernier envoi : {last}\nDernier message ID : {mid}\nProchain envoi automatique : pendant ouverture selon planning.\nPass soirée/total actifs selon groupes configurés.'

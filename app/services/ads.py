@@ -18,7 +18,47 @@ async def list_ads_text():
         res=await db.execute(select(Advertisement).order_by(Advertisement.id.desc()).limit(20))
         ads=list(res.scalars().all())
     if not ads: return '📢 Aucune publicité configurée.'
-    return '📢 Publicités configurées\n\n'+'\n'.join([f'#{a.id} — {"active" if a.active else "off"} — {(a.text or "[image]")[:60]}' for a in ads])
+    return '📢 Publicités configurées\n\nClique sur une pub pour la gérer.'
+
+async def ads_list_kb():
+    async with SessionLocal() as db:
+        res=await db.execute(select(Advertisement).order_by(Advertisement.id.desc()).limit(20))
+        ads=list(res.scalars().all())
+    rows=[]
+    for a in ads:
+        label=f'#{a.id} {"🟢" if a.active else "🔴"} '+((a.text or '[image seule]')[:28])
+        rows.append([InlineKeyboardButton(text=label, callback_data=f'ad_manage:{a.id}')])
+    rows.append([InlineKeyboardButton(text='⬅️ Retour pubs', callback_data='adm_ads')])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+async def ad_detail(ad_id:int):
+    async with SessionLocal() as db:
+        ad=await db.get(Advertisement, ad_id)
+    if not ad: return 'Pub introuvable.', None
+    text=(ad.text or '[sans texte]')
+    msg=f'📢 Pub #{ad.id}\n\nStatut : {"active" if ad.active else "off"}\nImage : {"oui" if ad.image_file_id else "non"}\n\nTexte :\n{text}'
+    kb=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='🟢/🔴 Activer/Désactiver', callback_data=f'ad_toggle:{ad.id}')],
+        [InlineKeyboardButton(text='🗑 Supprimer cette pub', callback_data=f'ad_delete:{ad.id}')],
+        [InlineKeyboardButton(text='📋 Retour liste pubs', callback_data='ad_list')],
+    ])
+    return msg,kb
+
+async def toggle_ad(ad_id:int):
+    async with SessionLocal() as db:
+        ad=await db.get(Advertisement, ad_id)
+        if not ad: return False
+        ad.active=not ad.active
+        await db.commit()
+        return True
+
+async def delete_ad(ad_id:int):
+    async with SessionLocal() as db:
+        ad=await db.get(Advertisement, ad_id)
+        if not ad: return False
+        await db.delete(ad)
+        await db.commit()
+        return True
 
 async def send_random_ad(bot:Bot, force:bool=False):
     if not force and not await st.is_open(): return None
