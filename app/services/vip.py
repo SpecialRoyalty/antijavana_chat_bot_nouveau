@@ -108,13 +108,20 @@ async def payment_text_for_cart(user_id:int):
     selected='\n'.join(f'- {OFFER_NAMES.get(x,x)}' for x in sorted(items)) or 'Aucune'
     return f'💳 Paiement VIP\n\nSélection :\n{selected}\n\nTotal : {total}€\n\nPayPal : {s.paypal_text or "à configurer"}\nRevolut : {s.revolut_text or "à configurer"}\nCrypto : {s.crypto_text or "à configurer"}\n\nAprès paiement, envoie une capture ici.'
 
+def _proof_file_id(msg:Message):
+    if msg.photo: return msg.photo[-1].file_id
+    if msg.document: return msg.document.file_id
+    return None
+
 async def handle_vip_proof(bot:Bot,msg:Message):
-    if not msg.photo or not msg.from_user: return False
+    if not msg.from_user: return False
+    fid=_proof_file_id(msg)
+    if not fid: return False
     async with SessionLocal() as db:
         res=await db.execute(select(VipOrder).where(VipOrder.user_id==msg.from_user.id,VipOrder.status.in_(['selecting','pending'])).order_by(VipOrder.id.desc()).limit(1))
         order=res.scalar_one_or_none()
         if not order: return False
-        order.screenshot_file_id=msg.photo[-1].file_id; order.status='pending'; await db.commit()
+        order.screenshot_file_id=fid; order.status='pending'; await db.commit()
         await msg.answer('✅ Capture reçue. Validation admin en attente.')
         await notify_admins(bot,f'💰 Nouvelle demande VIP\n\nUtilisateur : @{msg.from_user.username or msg.from_user.full_name}\nOffres : {order.offers}\nMontant : {order.amount}€', admin_validate_kb('vip',order.id))
         return True

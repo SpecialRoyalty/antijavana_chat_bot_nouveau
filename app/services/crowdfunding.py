@@ -82,7 +82,8 @@ async def campaign_detail(cid:int):
     kb=InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='✅ Définir principale', callback_data=f'crowd_active:{c.id}'), InlineKeyboardButton(text='🟢/🔴 ON/OFF', callback_data=f'crowd_toggle:{c.id}')],
         [InlineKeyboardButton(text='📝 Modifier texte', callback_data=f'await:crowd_text:{c.id}'), InlineKeyboardButton(text='🎯 Modifier objectif', callback_data=f'await:crowd_target:{c.id}')],
-        [InlineKeyboardButton(text='🖼 Modifier image', callback_data=f'await:crowd_image:{c.id}'), InlineKeyboardButton(text='🗑 Supprimer', callback_data=f'crowd_delete:{c.id}')],
+        [InlineKeyboardButton(text='🖼 Modifier image', callback_data=f'await:crowd_image:{c.id}'), InlineKeyboardButton(text='📤 Publier cette campagne', callback_data=f'crowd_send_one:{c.id}')],
+        [InlineKeyboardButton(text='🗑 Supprimer', callback_data=f'crowd_delete:{c.id}')],
         [InlineKeyboardButton(text='📋 Retour campagnes', callback_data='crowd_list')]
     ])
     return txt,kb
@@ -115,26 +116,61 @@ async def send_crowd_ad(bot:Bot, force:bool=False):
     await st.set_value('last_crowd_message_id', str(m.message_id))
     await st.set_value('last_crowd_campaign_id', str(c.id))
     return m.message_id
+
+async def send_campaign_by_id(bot:Bot, cid:int, force:bool=True):
+    if not force and not await st.is_open(): return None
+    async with SessionLocal() as db:
+        c=await db.get(Crowdfunding,cid)
+    if not c: return None
+    s=get_settings()
+    text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
+    kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
+    if c.image_file_id:
+        m=await bot.send_photo(s.main_group_id,c.image_file_id,caption=text,reply_markup=kb)
+        await track(s.main_group_id,m.message_id,None,'crowdfunding',True)
+    else:
+        m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
+        await track(s.main_group_id,m.message_id,None,'crowdfunding',False)
+    await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+    await st.set_value('last_crowd_message_id', str(m.message_id))
+    await st.set_value('last_crowd_campaign_id', str(c.id))
+    return m.message_id
+
 async def start_crowd_private(bot:Bot, user_id:int):
     c=await get_campaign()
     await bot.send_message(user_id, f'💰 Participation\n\nObjectif actuel : {c.current_amount}€ / {c.target_amount}€\n\nRéponds avec le montant que tu veux envoyer.')
     await st.set_value(f'crowd_state:{user_id}','amount')
     await st.set_value(f'crowd_campaign:{user_id}', str(c.id))
 async def handle_crowd_text(msg:Message):
+    if not msg.from_user:
+        return False
     state=await st.get_value(f'crowd_state:{msg.from_user.id}','')
     if state!='amount': return False
     amount=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
+    if amount <= 0:
+        await msg.answer('Envoie un montant valide, par exemple 10.')
+        return True
     await st.set_value(f'crowd_amount:{msg.from_user.id}',str(amount))
     await st.set_value(f'crowd_state:{msg.from_user.id}','proof')
-    await msg.answer(f'Montant : {amount}€\n\nChoisis un moyen de paiement ci-dessous. Après paiement, envoie une capture ici.',reply_markup=pay_kb('crowd_pay'))
+    await msg.answer(f'Montant sélectionné : {amount}€\n\nChoisis un moyen de paiement :',reply_markup=pay_kb('crowd_pay'))
     return True
+
+def _proof_file_id(msg:Message):
+    if msg.photo: return msg.photo[-1].file_id
+    if msg.document: return msg.document.file_id
+    return None
+
 async def handle_crowd_proof(bot:Bot,msg:Message):
+    if not msg.from_user:
+        return False
     state=await st.get_value(f'crowd_state:{msg.from_user.id}','')
-    if state!='proof' or not msg.photo: return False
+    fid=_proof_file_id(msg)
+    if state!='proof' or not fid: return False
     amount=int(await st.get_value(f'crowd_amount:{msg.from_user.id}','0') or '0')
     async with SessionLocal() as db:
         cid=await st.get_value(f'crowd_campaign:{msg.from_user.id}','0')
-        p=PaymentProof(user_id=msg.from_user.id,kind=f'crowdfunding:{cid}',amount=amount,screenshot_file_id=msg.photo[-1].file_id,status='pending'); db.add(p); await db.commit(); pid=p.id
+        p=PaymentProof(user_id=msg.from_user.id,kind=f'crowdfunding:{cid}',amount=amount,screenshot_file_id=fid,status='pending'); db.add(p); await db.commit(); pid=p.id
+    await st.set_value(f'crowd_state:{msg.from_user.id}','pending')
     await msg.answer('✅ Capture reçue. Validation admin en attente.')
     await notify_admins(bot,f'💰 Crowdfunding à valider\n\nUtilisateur : @{msg.from_user.username or msg.from_user.full_name}\nMontant : {amount}€',admin_validate_kb('crowd',pid))
     return True
@@ -156,7 +192,7 @@ async def validate_crowd(bot:Bot,pid:int,ok:bool):
                 c.current_amount+=p.amount
                 updated_campaign_id=c.id
         await db.commit()
-    await bot.send_message(p.user_id,'✅ Participation validée.' if ok else '❌ Participation refusée.')
+    await bot.send_message(p.user_id,('✅ Participation validée\n\nMontant ajouté : '+str(p.amount)+'€\n\nMerci pour ton soutien. Une fois les médias achetés, tous les participants recevront automatiquement une copie.') if ok else '❌ Participation refusée.')
     if ok and updated_campaign_id:
         await refresh_last_crowd_message(bot, updated_campaign_id)
     return 'OK'
