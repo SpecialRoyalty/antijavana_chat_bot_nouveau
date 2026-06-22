@@ -1,5 +1,5 @@
 from aiogram import Router, Bot, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from app.config import get_settings
 from app.services.state import add_vote, ensure_status_message, vote_count
@@ -7,7 +7,9 @@ from app.services import settings as st
 from app.services.session_ops import set_group_open
 from app.utils.time import in_slot
 from app.services.vip import send_vip_private, toggle_cart, user_cart, vip_menu_text, vip_private_kb, create_order_from_cart, payment_text_for_cart, payment_kb
-from app.services.crowdfunding import start_crowd_private
+from app.services.crowdfunding import start_crowd_private, handle_crowd_text, handle_crowd_proof
+from app.services.invites import send_invite_private
+from app.services.vip import handle_vip_proof
 router=Router()
 
 async def dm_or_deeplink(cb:CallbackQuery, bot:Bot, offer:str):
@@ -71,6 +73,17 @@ async def crowd(cb:CallbackQuery, bot:Bot):
         if username: await cb.answer(url=f'https://t.me/{username}?start=crowd')
         else: await cb.answer('Démarre le bot en privé puis reclique.', show_alert=True)
 
+
+@router.callback_query(F.data=='invite_private')
+async def invite_private(cb:CallbackQuery, bot:Bot):
+    try:
+        await send_invite_private(bot, cb.from_user.id)
+        await cb.answer('Lien envoyé en privé ✅')
+    except (TelegramForbiddenError, TelegramBadRequest):
+        username=get_settings().public_bot_username.strip().lstrip('@')
+        if username: await cb.answer(url=f'https://t.me/{username}?start=invite')
+        else: await cb.answer('Démarre le bot en privé puis reclique.', show_alert=True)
+
 @router.callback_query(F.data.startswith('vip_pay:') | F.data.startswith('crowd_pay:'))
 async def paynoop(cb:CallbackQuery):
     method=cb.data.split(':')[1]
@@ -78,3 +91,16 @@ async def paynoop(cb:CallbackQuery):
     info={'paypal':s.paypal_text or 'PayPal non configuré.', 'revolut':s.revolut_text or 'Revolut non configuré.', 'crypto':s.crypto_text or 'Crypto non configuré.'}.get(method,'')
     await cb.message.answer(f'💳 {method.upper()}\n\n{info}\n\nAprès paiement, envoie une capture ici.')
     await cb.answer('Instructions envoyées ✅')
+
+
+@router.message(F.chat.type=='private')
+async def private_user_flows(msg:Message, bot:Bot):
+    # Parcours privés pour les non-admins et fallback pour tout utilisateur.
+    if not msg.from_user:
+        return
+    if await handle_crowd_text(msg):
+        return
+    if await handle_crowd_proof(bot, msg):
+        return
+    if await handle_vip_proof(bot, msg):
+        return

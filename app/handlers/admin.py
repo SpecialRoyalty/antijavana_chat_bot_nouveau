@@ -3,14 +3,14 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart
 from sqlalchemy import select
 from app.config import get_settings
-from app.keyboards.common import admin_kb, goal_kb, settings_kb, justice_kb, cleanup_kb, mod_kb, crowd_admin_kb, ads_admin_kb, confirm_kb, back_kb, rules_admin_kb, hashban_kb, vip_admin_kb, top_admin_kb
+from app.keyboards.common import admin_kb, goal_kb, settings_kb, justice_kb, cleanup_kb, mod_kb, crowd_admin_kb, ads_admin_kb, confirm_kb, back_kb, rules_admin_kb, hashban_kb, vip_admin_kb, top_admin_kb, invite_admin_kb
 from app.services import settings as st
 from app.services.session_ops import set_group_open, cleanup_session, count_known_bans_and_restrictions, presidential_pardon, ministerial_pardon
 from app.services.state import ensure_status_message
 from app.services.health import health_text
 from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private, handle_vip_proof
-from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private, campaigns_kb, campaign_detail, toggle_campaign, delete_campaign, handle_crowd_text, handle_crowd_proof
-from app.services.invites import top_text
+from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private, campaigns_kb, campaign_detail, toggle_campaign, delete_campaign, handle_crowd_text, handle_crowd_proof, send_campaign_by_id
+from app.services.invites import top_text, send_invite_ad, invite_health_text, tiers_text, set_tiers_from_text, send_invite_private
 from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad, set_ad_text, set_ad_image, send_ad_by_id
 from app.db.session import SessionLocal
 from app.db.models import WordRule
@@ -38,6 +38,9 @@ async def start(msg:Message, bot:Bot):
         if arg=='crowd':
             await start_crowd_private(bot, msg.from_user.id)
             return
+        if arg=='invite':
+            await send_invite_private(bot, msg.from_user.id)
+            return
         if is_admin(msg.from_user.id):
             await msg.answer('Panel admin',reply_markup=admin_kb())
         else:
@@ -60,7 +63,7 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     elif d=='adm_vip': await cb.message.answer('💎 VIP\n\nPublication manuelle pour test + suivi santé.',reply_markup=vip_admin_kb())
     elif d=='adm_crowd': await cb.message.answer('💰 Crowdfunding',reply_markup=crowd_admin_kb())
     elif d=='adm_ads': await cb.message.answer('📢 Publicités',reply_markup=ads_admin_kb())
-    elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nValidation après 5 min, paliers GoFile, compteurs séparés total/récompense.\nConfiguration avancée à finaliser selon tes liens GoFile.',reply_markup=back_kb())
+    elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nTexte + image + bouton Recevoir vidéos. Validation après 5 min, paliers GoFile, compteurs total/récompense.',reply_markup=invite_admin_kb())
     elif d=='adm_top': await cb.message.answer(await top_text(), reply_markup=top_admin_kb())
     elif d=='adm_mod': await cb.message.answer('🛡️ Modération\nAjoute les mots via boutons, sans commandes.',reply_markup=mod_kb())
     elif d=='adm_rules': await cb.message.answer('📜 Règles\n\nTu peux publier maintenant ou modifier le texte.',reply_markup=rules_admin_kb())
@@ -110,6 +113,9 @@ async def await_input(cb:CallbackQuery):
         'vip_price:total':'Envoie le prix du Pass total en nombre.',
         'vip_price:javana':'Envoie le prix de COPIE 1:1 VIP JAVANA -50% en nombre.',
         'hash_ban_media':'Envoie le média à bannir par hash. Le bot l’ajoutera en amont.',
+        'invite_text':'Envoie le texte du message invitations.',
+        'invite_image':'Envoie l’image du message invitations.',
+        'invite_tiers':'Envoie les paliers, une ligne par palier : 1|Label|Lien GoFile',
     }
     await cb.message.answer('✍️ '+prompts.get(state,'Envoie la valeur.'))
     await cb.answer()
@@ -182,6 +188,15 @@ async def cb_crowd_delete(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
         cid=int(cb.data.split(':')[1]); ok=await delete_campaign(cid)
         await cb.message.answer('🗑 Campagne supprimée.' if ok else 'Campagne introuvable.', reply_markup=await campaigns_kb())
+        await cb.answer()
+
+
+@router.callback_query(F.data.startswith('crowd_send_one:'))
+async def cb_crowd_send_one(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        cid=int(cb.data.split(':')[1])
+        mid=await send_campaign_by_id(bot,cid,force=True)
+        await cb.message.answer('💰 Campagne publiée maintenant.' if mid else 'Campagne introuvable ou erreur.')
         await cb.answer()
 
 @router.callback_query(F.data=='crowd_stats')
@@ -298,12 +313,13 @@ async def cb_confirm(cb:CallbackQuery, bot:Bot):
 @router.message(F.chat.type=='private')
 async def admin_text_state(msg:Message, bot:Bot):
     if not msg.from_user or not is_admin(msg.from_user.id): return
+    # Priorité aux parcours utilisateur en cours, même si l'utilisateur est admin.
+    # Sinon un ancien état admin peut bloquer crowdfunding/VIP.
+    if await handle_crowd_text(msg): return
+    if await handle_crowd_proof(bot,msg): return
+    if await handle_vip_proof(bot,msg): return
     state=await get_admin_state(msg.from_user.id)
     if not state:
-        # Les admins sont aussi des utilisateurs pour VIP/crowdfunding : ne pas avaler leurs réponses.
-        if await handle_crowd_text(msg): return
-        if await handle_crowd_proof(bot,msg): return
-        if await handle_vip_proof(bot,msg): return
         return
     if state=='goal':
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
@@ -363,6 +379,18 @@ async def admin_text_state(msg:Message, bot:Bot):
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
         await st.set_value(f'vip_price_{offer}', str(n))
         await msg.answer(f'✅ Prix VIP sauvegardé : {n}€', reply_markup=vip_admin_kb())
+    elif state=='invite_text':
+        await st.set_value('invite_text', msg.text or '')
+        await msg.answer('✅ Texte invitations sauvegardé.', reply_markup=invite_admin_kb())
+    elif state=='invite_image':
+        if msg.photo:
+            await st.set_value('invite_image_file_id', msg.photo[-1].file_id)
+            await msg.answer('✅ Image invitations sauvegardée.', reply_markup=invite_admin_kb())
+        else:
+            await msg.answer('Envoie une image.') ; return
+    elif state=='invite_tiers':
+        ok=await set_tiers_from_text(msg.text or '')
+        await msg.answer('✅ Paliers sauvegardés.' if ok else 'Format invalide. Exemple : 1|1 vidéo|https://gofile...', reply_markup=invite_admin_kb())
     elif state=='hash_ban_media':
         n=await ban_hash_from_message(msg, bot)
         if n: await msg.answer(f'✅ Hash ban ajouté : {n} média(s).', reply_markup=hashban_kb())
@@ -416,6 +444,26 @@ async def cb_justice_run(cb:CallbackQuery, bot:Bot):
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='✅ Valider justice', callback_data='confirm:justice_run')],[InlineKeyboardButton(text='❌ Annuler', callback_data='adm_dashboard')]])
             await cb.message.answer(txt, reply_markup=kb)
+        await cb.answer()
+
+
+@router.callback_query(F.data=='invite_send')
+async def cb_invite_send(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        mid=await send_invite_ad(bot, force=True)
+        await cb.message.answer('🎁 Message invitations publié maintenant.' if mid else 'Erreur publication invitations.')
+        await cb.answer()
+
+@router.callback_query(F.data=='invite_health')
+async def cb_invite_health(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        await cb.message.answer(await invite_health_text())
+        await cb.answer()
+
+@router.callback_query(F.data=='invite_tiers')
+async def cb_invite_tiers(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        await cb.message.answer(await tiers_text(), reply_markup=invite_admin_kb())
         await cb.answer()
 
 @router.callback_query(F.data.startswith('validate:') | F.data.startswith('reject:'))
