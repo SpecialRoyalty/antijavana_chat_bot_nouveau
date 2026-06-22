@@ -165,3 +165,14 @@ class VipAccess(Base):
     expires_at: Mapped[datetime|None]=mapped_column(DateTime, nullable=True)
     status: Mapped[str]=mapped_column(String(30), default='pending')  # pending, active, expired, failed
     created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
+
+class FreePassReservation(Base):
+    __tablename__='free_pass_reservations'
+    id: Mapped[int]=mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int]=mapped_column(BigInteger, index=True)
+    username: Mapped[str]=mapped_column(String(255), default='')
+    session_key: Mapped[str]=mapped_column(String(40), index=True)
+    status: Mapped[str]=mapped_column(String(30), default='reserved')  # reserved, sent, expired, rejected
+    access_id: Mapped[int|None]=mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
+    __table_args__=(UniqueConstraint('user_id','session_key', name='uq_free_pass_user_session'),)
