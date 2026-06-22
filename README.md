@@ -18,3 +18,8 @@ Le scheduler tourne chaque minute, mais le texte affiché reste stable :
 - sous 1h : moins de 1h, puis 30 min, 10 min, 5 min, 2 min, 1 min ;
 - vote = actualisation immédiate.
 
+
+
+## V16
+- Pass Soirée Gratuit : exclusions ajoutées. Impossible si Pass Total, VIP JAVANA ou Pass Soirée déjà acheté/réservé pour la session.
+- Compte à rebours objectif atteint : actualisation forcée aux paliers horaires via marqueur discret `Actualisation : HH:00`, puis minute par minute dans la dernière heure.
