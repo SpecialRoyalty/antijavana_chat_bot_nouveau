@@ -1,27 +1,15 @@
-# Telegram Railway Bot V22 — Free Pass deep-link fix
+# Telegram Railway Bot V23
 
-Changements V22 :
+Mise à jour Pass Soirée Gratuit :
 
-- Le bouton public **🎟 Réserver gratuitement** ouvre maintenant directement le bot en privé via `t.me/BOT?start=freepass`.
-- La réservation est finalisée en privé, ce qui garantit que le bot pourra envoyer le lien à 23h.
-- Si toutes les places sont prises, le message groupe devient :
+- 1 seule campagne Pass Gratuit par session.
+- Publication/configuration autorisée uniquement entre 05h00 et 22h59.
+- Après publication, la campagne est verrouillée : plus de modification places/cooldown/conditions.
+- Après publication : seulement voir, désactiver ou supprimer.
+- Si toutes les places sont prises : le message groupe devient « Offre complète » sans bouton.
+- Le message est supprimé au nettoyage/fermeture comme les autres messages suivis.
+- À 05h : les bénéficiaires Pass Soirée sont kick, liens révoqués, médias conservés.
+- Relance après expiration : propose Pass Soirée prochaine session + Pass Total + VIP JAVANA.
+- Santé enrichie avec statut/verrou/places restantes.
 
-```text
-🔥 PASS SOIRÉE OFFERT
-
-Offre complète pour ce soir.
-
-Rendez-vous à la prochaine session.
-```
-
-sans bouton.
-
-- Les bénéficiaires du Pass Soirée gratuit suivent les mêmes règles que le Pass Soirée payant : lien à 23h ou immédiat entre 23h et 05h, puis retrait à 05h.
-- `PUBLIC_BOT_USERNAME` doit être configuré pour que le bouton ouvre le bot directement.
-
-Variables utiles :
-
-```env
-PUBLIC_BOT_USERNAME=TonBotSansArobase
-PASS_SOIREE_GROUP_ID=-100...
-```
+Important : supprime les anciennes tables si tu repars d'une base de test incompatible.
