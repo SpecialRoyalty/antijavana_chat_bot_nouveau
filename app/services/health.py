@@ -2,9 +2,10 @@ from sqlalchemy import select, func
 from aiogram import Bot
 from app.config import get_settings
 from app.db.session import SessionLocal
-from app.db.models import ErrorLog, TrackedMessage, User, VipOrder, Vote
+from app.db.models import ErrorLog, TrackedMessage, User, VipOrder, Vote, FreePassReservation
 from app.services import settings as st
 from app.utils.time import mid_time, slot_times, next_open_text, next_status_update_text
+from app.services.freepass import reserved_count, places as freepass_places, remaining_places, is_locked as freepass_locked, published_session_key
 
 async def health_text(bot:Bot):
     s=get_settings(); slot=await st.time_slot(); start,end=slot_times(slot,s.timezone)
@@ -56,4 +57,5 @@ VIP — dernier envoi: {await st.get_value('last_vip_sent_at','jamais')} — pro
 Règles — dernier envoi: {await st.get_value('last_rules_sent_at','jamais')} — prochain: toutes les 30 min si ouvert
 Top inviteurs — dernier envoi: {await st.get_value('last_top_sent_at','jamais')}
 Pass gratuit — statut: {await st.get_value('free_pass_enabled','false')} — dernier envoi: {await st.get_value('last_free_pass_sent_at','jamais')}
+Pass gratuit — campagne: {await published_session_key() or 'non publiée'} — verrou: {'OUI' if await freepass_locked() else 'NON'} — places restantes: {await remaining_places()} / {await freepass_places()}
 '''
