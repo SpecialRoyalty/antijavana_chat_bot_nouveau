@@ -18,7 +18,7 @@ from app.services.justice import justice_preview_text, execute_justice
 import asyncio
 from aiogram.exceptions import TelegramBadRequest
 from app.services.hashban import ban_hash_from_message, banned_hash_count
-from app.services.freepass import free_pass_admin_kb, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current, reserve_free_pass, refresh_free_pass_message
+from app.services.freepass import free_pass_admin_kb, free_pass_admin_kb_async, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current, reserve_free_pass, refresh_free_pass_message, is_locked as freepass_is_locked, in_admin_config_window as freepass_window_open, delete_free_pass_campaign
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
@@ -71,7 +71,7 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     elif d=='adm_cleanup': await cb.message.answer('🧹 Nettoyage\n\nSi les médias ne se suppriment pas, vérifie que le bot est admin avec droit de suppression.',reply_markup=cleanup_kb())
     elif d=='adm_suspects': await cb.message.answer('🕵️ Comptes suspects\n\nScore 50+ visible admin\n80+ invitation en attente\n100+ rejetée\n\nBoutons de suppression par score à ajouter après volume réel.',reply_markup=back_kb())
     elif d=='adm_vip': await cb.message.answer('💎 VIP\n\nPublication manuelle pour test + suivi santé.',reply_markup=vip_admin_kb())
-    elif d=='adm_freepass': await cb.message.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+    elif d=='adm_freepass': await cb.message.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif d=='adm_crowd': await cb.message.answer('💰 Crowdfunding',reply_markup=crowd_admin_kb())
     elif d=='adm_ads': await cb.message.answer('📢 Publicités',reply_markup=ads_admin_kb())
     elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nTexte + image + bouton Recevoir vidéos. Validation après 5 min, paliers GoFile, compteurs total/récompense.',reply_markup=invite_admin_kb())
@@ -104,7 +104,11 @@ async def cb_slot(cb:CallbackQuery, bot:Bot):
 @router.callback_query(F.data.startswith('await:'))
 async def await_input(cb:CallbackQuery):
     if not cb.from_user or not is_admin(cb.from_user.id): return
-    state=cb.data.split(':',1)[1]; await set_admin_state(cb.from_user.id,state)
+    state=cb.data.split(':',1)[1]
+    if state.startswith('freepass_') and (await freepass_is_locked() or not freepass_window_open()):
+        await cb.answer('🔒 Campagne verrouillée ou fenêtre admin fermée (05h-23h).', show_alert=True)
+        return
+    await set_admin_state(cb.from_user.id,state)
     prompts={
         'goal':'Envoie le nouvel objectif en nombre.',
         'forbidden':'Envoie le mot interdit à ajouter.',
@@ -312,27 +316,43 @@ async def cb_freepass_toggle(cb:CallbackQuery):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     cur=(await st.get_value('free_pass_enabled','false'))=='true'
     await st.set_value('free_pass_enabled','false' if cur else 'true')
-    await cb.message.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+    await cb.message.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     await cb.answer('Pass gratuit: ' + ('OFF' if cur else 'ON'))
 
 @router.callback_query(F.data=='freepass_publish')
 async def cb_freepass_publish(cb:CallbackQuery, bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     mid=await publish_free_pass(bot)
-    await cb.message.answer('🎟 Offre gratuite publiée.' if mid else 'Offre gratuite inactive. Active-la d’abord.', reply_markup=free_pass_admin_kb())
+    if mid == 'window_closed':
+        msg='⛔ Création verrouillée pendant la session. Configure/publie entre 05h00 et 22h59.'
+    elif mid == 'already_published':
+        msg='⛔ Une campagne Pass Gratuit existe déjà pour cette session.'
+    elif mid:
+        msg='🎟 Offre gratuite publiée. Campagne verrouillée pour cette session.'
+    else:
+        msg='Offre gratuite inactive. Active-la d’abord.'
+    await cb.message.answer(msg, reply_markup=await free_pass_admin_kb_async())
     await cb.answer()
 
 @router.callback_query(F.data=='freepass_beneficiaries')
 async def cb_freepass_beneficiaries(cb:CallbackQuery):
     if not cb.from_user or not is_admin(cb.from_user.id): return
-    await cb.message.answer(await freepass_beneficiaries_text(), reply_markup=free_pass_admin_kb())
+    await cb.message.answer(await freepass_beneficiaries_text(), reply_markup=await free_pass_admin_kb_async())
     await cb.answer()
 
 @router.callback_query(F.data=='freepass_reset')
 async def cb_freepass_reset(cb:CallbackQuery):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     n=await freepass_reset_current()
-    await cb.message.answer(f'🔄 Réservations en attente annulées pour cette session : {n}', reply_markup=free_pass_admin_kb())
+    await cb.message.answer(f'🔄 Réservations en attente annulées pour cette session : {n}', reply_markup=await free_pass_admin_kb_async())
+    await cb.answer()
+
+
+@router.callback_query(F.data=='freepass_delete')
+async def cb_freepass_delete(cb:CallbackQuery, bot:Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    await delete_free_pass_campaign(bot)
+    await cb.message.answer('🗑 Campagne Pass Gratuit supprimée/désactivée. Nouvelle campagne possible à la prochaine fenêtre autorisée.', reply_markup=await free_pass_admin_kb_async())
     await cb.answer()
 
 @router.callback_query(F.data.startswith('confirm:'))
@@ -447,21 +467,29 @@ async def admin_text_state(msg:Message, bot:Bot):
         ok=await set_tiers_from_text(msg.text or '')
         await msg.answer('✅ Paliers sauvegardés.' if ok else 'Format invalide. Exemple : 1|1 vidéo|https://gofile...', reply_markup=invite_admin_kb())
     elif state=='freepass_places':
+        if await freepass_is_locked() or not freepass_window_open():
+            await msg.answer('🔒 Campagne verrouillée. Modification impossible après publication ou hors fenêtre 05h-23h.', reply_markup=await free_pass_admin_kb_async()); await clear_admin_state(msg.from_user.id); return
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
         if n>0: await st.set_value('free_pass_places',str(n))
-        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+        await msg.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif state=='freepass_cooldown':
+        if await freepass_is_locked() or not freepass_window_open():
+            await msg.answer('🔒 Campagne verrouillée. Modification impossible après publication ou hors fenêtre 05h-23h.', reply_markup=await free_pass_admin_kb_async()); await clear_admin_state(msg.from_user.id); return
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
         if n>=0: await st.set_value('free_pass_cooldown_days',str(n))
-        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+        await msg.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif state=='freepass_media':
+        if await freepass_is_locked() or not freepass_window_open():
+            await msg.answer('🔒 Campagne verrouillée. Modification impossible après publication ou hors fenêtre 05h-23h.', reply_markup=await free_pass_admin_kb_async()); await clear_admin_state(msg.from_user.id); return
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
         await st.set_value('free_pass_min_media',str(n))
-        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+        await msg.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif state=='freepass_invites':
+        if await freepass_is_locked() or not freepass_window_open():
+            await msg.answer('🔒 Campagne verrouillée. Modification impossible après publication ou hors fenêtre 05h-23h.', reply_markup=await free_pass_admin_kb_async()); await clear_admin_state(msg.from_user.id); return
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
         await st.set_value('free_pass_min_invites',str(n))
-        await msg.answer(await freepass_admin_text(), reply_markup=free_pass_admin_kb())
+        await msg.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif state=='hash_ban_media':
         n=await ban_hash_from_message(msg, bot)
         if n: await msg.answer(f'✅ Hash ban ajouté : {n} média(s).', reply_markup=hashban_kb())
