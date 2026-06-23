@@ -1,21 +1,27 @@
-# Telegram Railway Bot V18 — status recreate on countdown steps
+# Telegram Railway Bot V22 — Free Pass deep-link fix
 
-Changement V18 :
-- Le scheduler ne se contente plus d'éditer le message principal aux paliers.
-- Quand le texte du statut change automatiquement, le bot supprime l'ancien message principal et en publie un nouveau.
-- Résultat : l'heure Telegram visible du message se met bien à jour.
-- Les votes continuent d'éditer instantanément le message existant pour éviter le spam entre deux paliers.
+Changements V22 :
 
-Déploiement :
-1. Remplacer le code sur Railway.
-2. Garder les mêmes variables d'environnement.
-3. Redéployer.
+- Le bouton public **🎟 Réserver gratuitement** ouvre maintenant directement le bot en privé via `t.me/BOT?start=freepass`.
+- La réservation est finalisée en privé, ce qui garantit que le bot pourra envoyer le lien à 23h.
+- Si toutes les places sont prises, le message groupe devient :
 
-Note : Telegram affiche toujours l'heure originale sur un message édité. Pour afficher une nouvelle heure, il faut publier un nouveau message, ce que fait désormais le scheduler aux paliers.
+```text
+🔥 PASS SOIRÉE OFFERT
 
-## V20 — correction paliers objectif non atteint
-- Corrige le bug du message principal qui se recréait toutes les minutes quand l'objectif n'était pas atteint.
-- Le compte à rebours public est maintenant stable dans les deux états : 🔴 objectif non atteint et 🟡 objectif atteint.
-- Plus d'1h restante : mise à jour aux paliers horaires uniquement.
-- Dernière heure : 1h, 30 min, 10 min, 5 min, 2 min, 1 min.
-- Suppression de la ligne publique "Dernière actualisation" qui provoquait des changements de texte inutiles.
+Offre complète pour ce soir.
+
+Rendez-vous à la prochaine session.
+```
+
+sans bouton.
+
+- Les bénéficiaires du Pass Soirée gratuit suivent les mêmes règles que le Pass Soirée payant : lien à 23h ou immédiat entre 23h et 05h, puis retrait à 05h.
+- `PUBLIC_BOT_USERNAME` doit être configuré pour que le bouton ouvre le bot directement.
+
+Variables utiles :
+
+```env
+PUBLIC_BOT_USERNAME=TonBotSansArobase
+PASS_SOIREE_GROUP_ID=-100...
+```
