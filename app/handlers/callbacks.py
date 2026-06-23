@@ -88,13 +88,17 @@ async def invite_private(cb:CallbackQuery, bot:Bot):
 
 @router.callback_query(F.data=='freepass_reserve')
 async def freepass_reserve_cb(cb:CallbackQuery, bot:Bot):
+    # Fallback uniquement si PUBLIC_BOT_USERNAME n'est pas configuré et que le
+    # bouton URL ne peut pas être généré. Le fonctionnement recommandé reste le
+    # deep-link /start freepass.
     username=cb.from_user.username or cb.from_user.full_name or ''
     ok,msg=await reserve_free_pass(bot, cb.from_user.id, username)
     if ok:
         try:
             await bot.send_message(cb.from_user.id, msg)
         except Exception:
-            pass
+            await cb.answer('Ouvre le bot en privé pour confirmer ta réservation.', show_alert=True)
+            return
         await refresh_free_pass_message(bot)
         await cb.answer('Place réservée ✅', show_alert=True)
     else:

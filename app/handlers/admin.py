@@ -18,7 +18,7 @@ from app.services.justice import justice_preview_text, execute_justice
 import asyncio
 from aiogram.exceptions import TelegramBadRequest
 from app.services.hashban import ban_hash_from_message, banned_hash_count
-from app.services.freepass import free_pass_admin_kb, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current
+from app.services.freepass import free_pass_admin_kb, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current, reserve_free_pass, refresh_free_pass_message
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
@@ -41,6 +41,15 @@ async def start(msg:Message, bot:Bot):
             return
         if arg=='invite':
             await send_invite_private(bot, msg.from_user.id)
+            return
+        if arg=='freepass':
+            username = msg.from_user.username or msg.from_user.full_name or ''
+            ok, text = await reserve_free_pass(bot, msg.from_user.id, username)
+            await msg.answer(text)
+            try:
+                await refresh_free_pass_message(bot)
+            except Exception:
+                pass
             return
         if is_admin(msg.from_user.id):
             await msg.answer('Panel admin',reply_markup=admin_kb())
