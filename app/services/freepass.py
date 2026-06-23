@@ -9,7 +9,7 @@ from app.db.session import SessionLocal
 from app.db.models import FreePassReservation, User, VipAccess
 from app.services import settings as st
 from app.services.state import track, log_error
-from app.services.users import anon_name
+from app.services.users import anon_name, is_gibberish
 from app.services.vip import _soiree_send_now, _soiree_expire_utc_for_current_or_next, _send_access_link
 
 
@@ -36,13 +36,25 @@ async def reserved_count(session_key: str|None=None) -> int:
 async def remaining_places() -> int:
     return max(await places() - await reserved_count(), 0)
 
-async def user_eligible(user_id:int) -> tuple[bool,str]:
+async def user_eligible(user_id:int, username:str='', full_name:str='') -> tuple[bool,str]:
     if not await enabled(): return False, 'Offre inactive.'
     if await remaining_places() <= 0: return False, 'Toutes les places gratuites sont déjà réservées.'
     cd=await cooldown_days(); mm=await min_media(); mi=await min_invites()
     async with SessionLocal() as db:
         u=await db.get(User,user_id)
-        if not u: return False, 'Profil non enregistré. Réessaie après avoir interagi dans le groupe.'
+        if not u:
+            # Ne jamais bloquer un clic utilisateur avec "profil non enregistré".
+            # On crée une fiche minimale, puis les règles d'éligibilité normales
+            # s'appliquent (médias, invités, cooldown, accès existants).
+            score=0
+            if not username: score+=10
+            if is_gibberish(full_name or username): score+=20
+            u=User(id=user_id, username=username or None, full_name=full_name or username or '', suspect_score=score)
+            db.add(u)
+            await db.flush()
+        else:
+            if username: u.username=username
+            if full_name: u.full_name=full_name
         if u.is_banned or u.suspect_score>=100: return False, 'Compte non éligible.'
 
         # Exclusions business : ne pas offrir un Pass Soirée gratuit aux personnes
@@ -83,7 +95,7 @@ async def user_eligible(user_id:int) -> tuple[bool,str]:
     return True,'OK'
 
 async def reserve_free_pass(bot:Bot, user_id:int, username:str='') -> tuple[bool,str]:
-    ok,reason=await user_eligible(user_id)
+    ok,reason=await user_eligible(user_id, username=username, full_name=username)
     if not ok: return False, reason
     sk=session_key_now()
     async with SessionLocal() as db:
