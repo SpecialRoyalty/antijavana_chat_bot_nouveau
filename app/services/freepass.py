@@ -36,6 +36,12 @@ async def reserved_count(session_key: str|None=None) -> int:
 async def remaining_places() -> int:
     return max(await places() - await reserved_count(), 0)
 
+def _bot_deeplink(param: str) -> str | None:
+    username = get_settings().public_bot_username.strip().lstrip('@')
+    if not username:
+        return None
+    return f'https://t.me/{username}?start={param}'
+
 async def user_eligible(user_id:int, username:str='', full_name:str='') -> tuple[bool,str]:
     if not await enabled(): return False, 'Offre inactive.'
     if await remaining_places() <= 0: return False, 'Toutes les places gratuites sont déjà réservées.'
@@ -108,11 +114,21 @@ async def reserve_free_pass(bot:Bot, user_id:int, username:str='') -> tuple[bool
     # si on est déjà entre 23h et 05h, envoi immédiat
     if _soiree_send_now():
         await send_due_free_pass_links(bot, force=True, only_user_id=user_id)
-        return True, '✅ Place réservée. Ton lien unique vient d’être envoyé en privé.'
-    return True, '✅ Place réservée. Tu recevras ton lien unique à 23h00.'
+        return True, ('🎟 PASS SOIRÉE GRATUIT\n\n'
+                      'Ta place est réservée.\n\n'
+                      'Ton lien unique vient d’être envoyé.\n\n'
+                      'À 05h00, l’accès expire automatiquement.')
+    return True, ('🎟 PASS SOIRÉE GRATUIT\n\n'
+                  'Ta place est réservée.\n\n'
+                  'Ton lien unique te sera envoyé automatiquement à 23h00.\n\n'
+                  'À 05h00, l’accès expire automatiquement.')
 
 async def free_pass_text() -> str:
     p=await places(); r=await reserved_count(); rem=max(p-r,0); mm=await min_media(); mi=await min_invites(); cd=await cooldown_days()
+    if rem <= 0:
+        return ('🔥 PASS SOIRÉE OFFERT\n\n'
+                'Offre complète pour ce soir.\n\n'
+                'Rendez-vous à la prochaine session.')
     urgency=''
     if rem<=1: urgency='\n🔥 Dernière place.'
     elif rem<=3: urgency='\n🔥 Plus que 3 places.'
@@ -127,7 +143,17 @@ async def free_pass_text() -> str:
             f'Places restantes :\n{rem} / {p}{urgency}\n\n'
             f'Limite : 1 utilisation tous les {cd} jours.')
 
-def free_pass_kb():
+async def free_pass_kb():
+    # Important : le bouton public doit ouvrir le bot en privé.
+    # Telegram ne permet pas au bot d'envoyer un lien plus tard si la personne
+    # n'a jamais ouvert la conversation privée. La réservation est donc finalisée
+    # dans /start freepass.
+    if await remaining_places() <= 0:
+        return None
+    url=_bot_deeplink('freepass')
+    if url:
+        return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🎟 Réserver gratuitement', url=url)]])
+    # Fallback si PUBLIC_BOT_USERNAME n'est pas configuré.
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🎟 Réserver gratuitement', callback_data='freepass_reserve')]])
 
 def free_pass_admin_kb():
@@ -155,7 +181,7 @@ async def publish_free_pass(bot:Bot):
     if old:
         try: await bot.delete_message(s.main_group_id,int(old))
         except Exception: pass
-    m=await bot.send_message(s.main_group_id, await free_pass_text(), reply_markup=free_pass_kb())
+    m=await bot.send_message(s.main_group_id, await free_pass_text(), reply_markup=await free_pass_kb())
     await st.set_value('free_pass_message_id',str(m.message_id))
     await track(s.main_group_id,m.message_id,None,'free_pass_ad',False)
     await st.set_value('last_free_pass_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
@@ -165,7 +191,7 @@ async def refresh_free_pass_message(bot:Bot):
     s=get_settings(); mid=await st.get_value('free_pass_message_id','')
     if not mid: return
     try:
-        await bot.edit_message_text(await free_pass_text(), chat_id=s.main_group_id, message_id=int(mid), reply_markup=free_pass_kb())
+        await bot.edit_message_text(await free_pass_text(), chat_id=s.main_group_id, message_id=int(mid), reply_markup=await free_pass_kb())
     except Exception as e:
         # message unchanged ou supprimé : non critique
         pass
