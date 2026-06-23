@@ -27,33 +27,39 @@ def minutes_to_open(slot:str,tz:str)->int:
     return max(0,int(delta.total_seconds()//60))
 
 def countdown_text(slot:str,tz:str, achieved:bool=False)->str:
-    """Affichage stable du compte à rebours.
+    """Affichage STABLE du compte à rebours public.
 
-    IMPORTANT: cette fonction est volontairement stable entre deux paliers.
-    Le scheduler tourne chaque minute, mais le message ne doit changer qu'aux
-    vrais paliers: heure par heure, puis 30/10/5/2/1.
+    Le scheduler tourne toutes les minutes, mais le texte public ne doit pas
+    changer toutes les minutes. Cette fonction retourne donc uniquement des
+    paliers stables:
+
+    - plus d'1h: heure par heure, arrondie au-dessus (14h, 13h, 12h...)
+    - dernière heure: 1h, 30 min, 10 min, 5 min, 2 min, 1 min
+
+    Cette règle vaut pour les deux états:
+    - objectif non atteint (🔴 groupe fermé)
+    - objectif atteint (🟡 compte à rebours)
     """
     mins=minutes_to_open(slot,tz)
-    if mins<=0: return 'maintenant'
-    if achieved:
-        if mins>60:
-            # Exemple: à 5h32 restantes on affiche 6h; à 4h59 restantes, 5h.
-            return f'{math.ceil(mins/60)}h'
-        # Dernière heure: ne pas afficher les minutes réelles, seulement les paliers.
-        if mins>30: return '1h'
-        if mins>10: return '30 minutes'
-        if mins>5: return '10 minutes'
-        if mins>2: return '5 minutes'
-        if mins>1: return '2 minutes'
-        return '1 minute'
+    if mins<=0:
+        return 'maintenant'
+
+    # Plus d'une heure: jamais de minutes dans le message public.
+    # Exemple: 13h37 -> 14h; 13h00 -> 13h.
     if mins>60:
-        h=mins//60; m=mins%60
-        return f'{h}h {m}min' if m else f'{h}h'
-    if mins>30: return f'{mins} minutes'
-    if mins>10: return '30 minutes'
-    if mins>5: return '10 minutes'
-    if mins>2: return '5 minutes'
-    if mins>1: return '2 minutes'
+        return f'{math.ceil(mins/60)}h'
+
+    # Dernière heure: paliers uniquement, pas minute par minute.
+    if mins>30:
+        return '1h'
+    if mins>10:
+        return '30 minutes'
+    if mins>5:
+        return '10 minutes'
+    if mins>2:
+        return '5 minutes'
+    if mins>1:
+        return '2 minutes'
     return '1 minute'
 
 def next_open_text(slot:str,tz:str):
