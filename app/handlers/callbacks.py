@@ -6,7 +6,7 @@ from app.services.state import add_vote, ensure_status_message, vote_count
 from app.services import settings as st
 from app.services.session_ops import set_group_open
 from app.utils.time import in_slot
-from app.services.vip import send_vip_private, toggle_cart, user_cart, vip_menu_text, vip_private_kb, create_order_from_cart, payment_text_for_cart, payment_kb
+from app.services.vip import send_vip_private, toggle_cart, user_cart, vip_menu_text, vip_private_kb, create_order_from_cart, payment_text_for_cart, payment_kb, vip_cart_block_reason
 from app.services.crowdfunding import start_crowd_private, handle_crowd_text, handle_crowd_proof
 from app.services.invites import send_invite_private
 from app.services.vip import handle_vip_proof
@@ -58,8 +58,10 @@ async def vip_toggle(cb:CallbackQuery):
 @router.callback_query(F.data=='vip_checkout')
 async def vip_checkout(cb:CallbackQuery):
     items=await user_cart(cb.from_user.id)
-    if not items:
-        await cb.answer('Choisis au moins une offre.', show_alert=True); return
+    reason=await vip_cart_block_reason(cb.from_user.id, items)
+    if reason:
+        await cb.answer(reason, show_alert=True)
+        return
     await create_order_from_cart(cb.from_user.id, cb.from_user.username or cb.from_user.full_name or '')
     await cb.message.edit_text(await payment_text_for_cart(cb.from_user.id), reply_markup=payment_kb())
     await cb.answer()

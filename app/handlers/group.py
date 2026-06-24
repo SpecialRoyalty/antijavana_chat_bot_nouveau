@@ -30,7 +30,12 @@ async def all_messages(msg:Message, bot:Bot):
     # Notifications entrée/sortie: supprimées toujours, sauf notifications de retrait pendant justice populaire.
     if msg.chat.id == get_settings().main_group_id and (msg.new_chat_members or msg.left_chat_member):
         keep_removed = bool(msg.left_chat_member and await st.get_value('justice_running','false') == 'true')
-        if not keep_removed:
+        if keep_removed:
+            # Pendant la justice populaire, les notifications de retrait restent visibles
+            # pour l'effet public. Elles sont quand même suivies afin d'être supprimées
+            # automatiquement à la fermeture/nettoyage de session.
+            await track(msg.chat.id, msg.message_id, getattr(msg.left_chat_member, 'id', None), 'justice_removed_notification', False)
+        else:
             try: await bot.delete_message(msg.chat.id, msg.message_id)
             except Exception: pass
         return
