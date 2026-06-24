@@ -1,15 +1,16 @@
-# Telegram Railway Bot V23
+# Telegram Railway Bot V24
 
-Mise à jour Pass Soirée Gratuit :
+Corrections V24 :
 
-- 1 seule campagne Pass Gratuit par session.
-- Publication/configuration autorisée uniquement entre 05h00 et 22h59.
-- Après publication, la campagne est verrouillée : plus de modification places/cooldown/conditions.
-- Après publication : seulement voir, désactiver ou supprimer.
-- Si toutes les places sont prises : le message groupe devient « Offre complète » sans bouton.
-- Le message est supprimé au nettoyage/fermeture comme les autres messages suivis.
-- À 05h : les bénéficiaires Pass Soirée sont kick, liens révoqués, médias conservés.
-- Relance après expiration : propose Pass Soirée prochaine session + Pass Total + VIP JAVANA.
-- Santé enrichie avec statut/verrou/places restantes.
+- VIP : un utilisateur qui possède déjà Pass Total ou VIP JAVANA ne peut plus acheter le Pass Soirée seul.
+- VIP : blocage des doublons Pass Total / VIP / Pass Soirée déjà actifs ou en attente.
+- Pass Soirée terminé à 05h : relance PV avec boutons 🎟 Pass Soirée prochaine session / 📦 Pass Total / 💎 VIP JAVANA.
+- Justice populaire : nouveaux membres protégés. Éligible seulement après vraie exposition :
+  - 0 média après au moins 3 sessions ouvertes connues ; ou
+  - aucun média depuis 14 sessions ouvertes connues.
+- Justice populaire : admins, trusted et bot protégés.
+- Notifications entrée/sortie : supprimées automatiquement.
+- Notifications de retrait pendant justice : restent visibles pendant la justice, mais sont maintenant suivies et supprimées au nettoyage/fermeture.
+- À chaque ouverture, les membres connus non protégés gagnent +1 session_present pour le calcul d’inactivité.
 
-Important : supprime les anciennes tables si tu repars d'une base de test incompatible.
+Rappel Telegram : le bot ne peut nettoyer que les messages qu'il voit depuis son lancement.
