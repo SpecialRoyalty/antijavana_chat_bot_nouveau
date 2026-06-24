@@ -21,7 +21,12 @@ async def set_group_open(bot:Bot, open_:bool, kind='auto'):
             await ensure_status_message(bot,s.main_group_id); return
         async with SessionLocal() as db:
             sess=SessionLog(chat_id=s.main_group_id,kind=kind,status='open'); db.add(sess); await db.flush()
-            await st.set_value('active_session_id',str(sess.id)); await db.commit()
+            await st.set_value('active_session_id',str(sess.id))
+            # Justice/inactivité : une ouverture accessible compte comme une session
+            # pour les membres connus, sauf admins/trusted/bannis. Telegram ne permet pas
+            # de lister tous les membres, donc on suit les profils déjà connus par le bot.
+            await db.execute(update(User).where(User.is_admin==False, User.is_trusted==False, User.is_banned==False).values(sessions_present=User.sessions_present+1))
+            await db.commit()
         await st.set_open(True)
         await st.set_value('manual_opened_at', datetime.utcnow().isoformat() if kind=='manual' else '')
     else:

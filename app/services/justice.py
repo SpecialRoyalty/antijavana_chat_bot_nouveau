@@ -32,8 +32,15 @@ async def candidates(limit:int=MAX_JUSTICE_REMOVALS):
         q = select(User).where(User.is_admin==False, User.is_trusted==False, User.is_banned==False)
         if protected_ids:
             q = q.where(User.id.not_in(list(protected_ids)))
-        q = q.where((User.media_count==0) | (User.last_media_session < max(sid-14, 0)))
-        q = q.order_by(User.media_count.asc(), User.last_media_session.asc(), User.suspect_score.desc()).limit(limit)
+        # Justice = uniquement les membres qui ont eu une vraie chance de participer.
+        # 1) jamais média après au moins 3 sessions accessibles
+        # 2) ancien actif mais plus aucun média depuis 14 sessions ouvertes
+        from sqlalchemy import and_, or_
+        q = q.where(or_(
+            and_(User.sessions_present >= 3, User.media_count == 0),
+            and_(User.sessions_present >= 14, User.last_media_session < max(sid-14, 0))
+        ))
+        q = q.order_by(User.media_count.asc(), User.last_media_session.asc(), User.sessions_present.desc(), User.suspect_score.desc()).limit(limit)
         res = await db.execute(q)
         return [u for u in res.scalars().all() if u.id not in protected_ids]
 

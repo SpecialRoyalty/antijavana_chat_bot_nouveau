@@ -45,6 +45,32 @@ async def toggle_cart(user_id:int, offer:str):
 async def cart_total(items:set[str])->int:
     return sum([await offer_price(x) for x in items])
 
+async def vip_cart_block_reason(user_id:int, items:set[str]) -> str|None:
+    # Cohérence commerciale : quelqu'un qui possède déjà un accès supérieur
+    # ne peut plus acheter le Pass soirée seul. On bloque aussi les doublons
+    # d'accès déjà actifs/en attente.
+    if not items:
+        return 'Choisis au moins une offre.'
+    async with SessionLocal() as db:
+        existing = await db.execute(
+            select(VipAccess).where(
+                VipAccess.user_id == user_id,
+                VipAccess.status.in_(['pending','active'])
+            )
+        )
+        accesses=list(existing.scalars().all())
+    have={a.offer for a in accesses}
+    if 'soiree' in items and not ({'total','javana'} & items) and ({'total','javana'} & have):
+        return 'Tu disposes déjà d’un accès supérieur. Le Pass Soirée n’est plus nécessaire.'
+    if 'total' in items and 'total' in have:
+        return 'Tu disposes déjà du Pass Total.'
+    if 'javana' in items and 'javana' in have:
+        return 'Tu disposes déjà du VIP JAVANA.'
+    if 'soiree' in items and 'soiree' in have and not ({'total','javana'} & items):
+        return 'Tu disposes déjà d’un Pass Soirée pour la session.'
+    return None
+
+
 def vip_private_kb(items:set[str]):
     def mark(o): return '☑️' if o in items else '☐'
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -273,7 +299,11 @@ async def expire_pass_soiree(bot:Bot):
                 except Exception as e: await log_error('pass_soiree_revoke',e)
             a.status='expired'; await db.commit()
             try:
-                await bot.send_message(a.user_id,'⏳ Ton Pass soirée est terminé.\n\nTu peux passer au Pass total ou au VIP.')
+                await bot.send_message(
+                    a.user_id,
+                    '⏳ Ton Pass Soirée est terminé.\n\nMerci pour ta participation.\n\nTu peux déjà réserver :\n\n🎟 Pass Soirée — prochaine session\n📦 Pass Total\n💎 VIP JAVANA -50%',
+                    reply_markup=vip_private_kb(set())
+                )
             except Exception: pass
     await st.set_value('last_pass_soiree_expire_at', datetime.utcnow().isoformat(timespec='seconds'))
     await notify_admins(bot, f'🎟 Pass soirée expiré : {kicked} membre(s) retiré(s). Médias conservés.')
