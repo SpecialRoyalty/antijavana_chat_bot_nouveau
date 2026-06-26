@@ -35,7 +35,7 @@ async def status_text(chat_id:int):
     if not await st.auto_enabled():
         if await st.is_open():
             return '🟢 GROUPE OUVERT\n\nVous pouvez envoyer vos médias <3\n\nMode manuel : fermeture de sécurité active.'
-        return '🔴 MAINTENANCE\n\nLe système est en maintenance ce soir.\n\nAucune ouverture prévue.'
+        return '🔴 MAINTENANCE\n\nLe système est en maintenance.'
     if await st.is_open():
         return f'🟢 GROUPE OUVERT\n\nObjectif atteint : {votes} / {goal} ✅\n\nVous pouvez envoyer vos médias <3\n\nFermeture prévue à {closing}.'
     missing=max(goal-votes,0)
