@@ -1,5 +1,5 @@
 from aiogram import Router, Bot, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
 from sqlalchemy import select
 from app.config import get_settings
@@ -14,7 +14,7 @@ from app.services.invites import top_text, send_invite_ad, invite_health_text, t
 from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad, set_ad_text, set_ad_image, send_ad_by_id
 from app.db.session import SessionLocal
 from app.db.models import WordRule
-from app.services.justice import justice_preview_text, execute_justice
+from app.services.justice import justice_preview_text, execute_justice, candidate_count
 import asyncio
 from aiogram.exceptions import TelegramBadRequest
 from app.services.hashban import ban_hash_from_message, banned_hash_count
@@ -22,6 +22,25 @@ from app.services.freepass import free_pass_admin_kb, free_pass_admin_kb_async, 
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
+
+async def justice_settings_text():
+    limit = await st.justice_limit()
+    total = await candidate_count()
+    return f'''⚖️ Justice populaire
+
+Limite :
+{limit} personnes / session
+
+Justifiables actuels : {total}
+
+Si plus de membres sont éligibles, seuls les {limit} plus prioritaires seront supprimés. Les autres seront reportés aux prochaines sessions.'''
+
+def justice_settings_kb(limit:int):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='−10', callback_data='justice_limit_delta:-10'), InlineKeyboardButton(text='−1', callback_data='justice_limit_delta:-1'), InlineKeyboardButton(text=f'{limit}', callback_data='noop'), InlineKeyboardButton(text='+1', callback_data='justice_limit_delta:1'), InlineKeyboardButton(text='+10', callback_data='justice_limit_delta:10')],
+        [InlineKeyboardButton(text='10', callback_data='justice_limit_set:10'), InlineKeyboardButton(text='20', callback_data='justice_limit_set:20'), InlineKeyboardButton(text='30', callback_data='justice_limit_set:30'), InlineKeyboardButton(text='50', callback_data='justice_limit_set:50')],
+        [InlineKeyboardButton(text='⬅️ Retour paramètres', callback_data='adm_settings')]
+    ])
 async def set_admin_state(uid:int,state:str): await st.set_value(f'admin_state:{uid}',state)
 async def get_admin_state(uid:int): return await st.get_value(f'admin_state:{uid}','')
 async def clear_admin_state(uid:int): await st.set_value(f'admin_state:{uid}','')
@@ -84,7 +103,7 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
         b,r=await count_known_bans_and_restrictions(); await cb.message.answer(f'⚖️ Grâce ministérielle\n\nRestrictions connues concernées : {r}\n\nConfirmer la levée des restrictions ?',reply_markup=confirm_kb('pardon_mute'))
     elif d=='adm_reports': await cb.message.answer('📊 Les rapports sont envoyés automatiquement à chaque fermeture, avec actions trusted et inactifs.',reply_markup=back_kb())
     elif d=='adm_hashban': await cb.message.answer('🚫 Hash ban\n\nEnvoie un média en privé pour l’ajouter aux hashes bannis.',reply_markup=hashban_kb())
-    elif d=='adm_settings': await cb.message.answer('⚙️ Paramètres horaires\nChangement autorisé uniquement hors session active.',reply_markup=settings_kb())
+    elif d=='adm_settings': await cb.message.answer('⚙️ Paramètres\nHoraires + limite justice populaire.',reply_markup=settings_kb())
     await cb.answer()
 
 @router.callback_query(F.data.startswith('goal_set:'))
@@ -545,6 +564,42 @@ async def cb_justice_run(cb:CallbackQuery, bot:Bot):
             await cb.message.answer(txt, reply_markup=kb)
         await cb.answer()
 
+
+
+@router.callback_query(F.data=='settings_justice')
+async def cb_settings_justice(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    limit = await st.justice_limit()
+    await cb.message.answer(await justice_settings_text(), reply_markup=justice_settings_kb(limit))
+    await cb.answer()
+
+@router.callback_query(F.data.startswith('justice_limit_delta:'))
+async def cb_justice_limit_delta(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    delta=int(cb.data.split(':',1)[1])
+    current=await st.justice_limit()
+    new=max(1, min(current+delta, 200))
+    await st.set_value('justice_limit', str(new))
+    try:
+        await cb.message.edit_text(await justice_settings_text(), reply_markup=justice_settings_kb(new))
+    except Exception:
+        await cb.message.answer(await justice_settings_text(), reply_markup=justice_settings_kb(new))
+    await cb.answer(f'Limite justice : {new}')
+
+@router.callback_query(F.data.startswith('justice_limit_set:'))
+async def cb_justice_limit_set(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    new=max(1, min(int(cb.data.split(':',1)[1]), 200))
+    await st.set_value('justice_limit', str(new))
+    try:
+        await cb.message.edit_text(await justice_settings_text(), reply_markup=justice_settings_kb(new))
+    except Exception:
+        await cb.message.answer(await justice_settings_text(), reply_markup=justice_settings_kb(new))
+    await cb.answer(f'Limite justice : {new}')
+
+@router.callback_query(F.data=='noop')
+async def cb_noop(cb:CallbackQuery):
+    await cb.answer()
 
 @router.callback_query(F.data=='invite_send')
 async def cb_invite_send(cb:CallbackQuery, bot:Bot):
