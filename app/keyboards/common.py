@@ -35,6 +35,7 @@ def settings_kb():
         [InlineKeyboardButton(text='22h30 → 00h45',callback_data='slot_set:22:30-00:45')],
         [InlineKeyboardButton(text='22h00 → 00h00',callback_data='slot_set:22:00-00:00')],
         [InlineKeyboardButton(text='23h00 → 01h00',callback_data='slot_set:23:00-01:00')],
+        [InlineKeyboardButton(text='⚖️ Limite justice populaire',callback_data='settings_justice')],
         [InlineKeyboardButton(text='⬅️ Retour',callback_data='adm_dashboard')]
     ])
 
