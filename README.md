@@ -14,3 +14,16 @@ Corrections V24 :
 - À chaque ouverture, les membres connus non protégés gagnent +1 session_present pour le calcul d’inactivité.
 
 Rappel Telegram : le bot ne peut nettoyer que les messages qu'il voit depuis son lancement.
+
+## V25 — Justice populaire configurable
+
+Inspection V24 : une limite existait déjà dans `app/services/justice.py` (`MAX_JUSTICE_REMOVALS = 20`), mais elle était codée en dur et le compteur affiché ne montrait que les candidats déjà limités.
+
+V25 corrige ça :
+- limite configurée en base avec valeur par défaut `justice_limit=20` ;
+- menu `⚙️ Paramètres → ⚖️ Limite justice populaire` ;
+- boutons `−10`, `−1`, `+1`, `+10`, presets 10/20/30/50 ;
+- preview justice affiche : total éligible, limite, supprimés, reportés ;
+- justice auto et manuelle appliquent exactement la même limite ;
+- Santé affiche la limite et le nombre de justifiables actuels ;
+- rapport admin après justice : éligibles / supprimés / reportés / limite.
