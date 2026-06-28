@@ -6,6 +6,7 @@ from app.db.models import ErrorLog, TrackedMessage, User, VipOrder, Vote, FreePa
 from app.services import settings as st
 from app.utils.time import mid_time, slot_times, next_open_text, next_status_update_text
 from app.services.freepass import reserved_count, places as freepass_places, remaining_places, is_locked as freepass_locked, published_session_key
+from app.services.justice import candidate_count
 
 async def health_text(bot:Bot):
     s=get_settings(); slot=await st.time_slot(); start,end=slot_times(slot,s.timezone)
@@ -39,6 +40,8 @@ Prochaine ouverture: {next_open_text(slot,s.timezone)}
 Prochaine mise à jour statut: {next_status_update_text(slot,s.timezone)}
 Dernière mise à jour statut: {await st.get_value('last_status_update_at','jamais')}
 Prochaine justice: {mid_time(slot,s.timezone).strftime('%H:%M')}
+Limite justice: {await st.justice_limit()} / session
+Justifiables actuels: {await candidate_count()}
 Prochaine fermeture: {end.strftime('%H:%M')}
 
 Groupes:
