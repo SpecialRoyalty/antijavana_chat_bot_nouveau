@@ -49,6 +49,30 @@ def _base_query(protected_ids:set[int], sid:int):
     q = q.where(_candidate_filter(sid))
     return q
 
+
+
+def _display_name(u: User) -> str:
+    """Nom public sans jamais afficher l'ID Telegram."""
+    if getattr(u, 'username', None):
+        return '@' + u.username
+    name = (getattr(u, 'full_name', None) or 'membre').strip()
+    return name[:80] or 'membre'
+
+async def _send_visible_justice_removal(bot: Bot, user: User):
+    """Fallback visible pour la justice populaire.
+
+    Telegram ne garantit pas l'affichage d'une notification système quand un bot
+    retire un membre via l'API (ban/unban = seul mécanisme Bot API fiable pour
+    "kick"). Pour conserver l'effet public demandé, on publie une notification
+    bot courte, suivie en base et supprimée à la fermeture.
+    """
+    s = get_settings()
+    try:
+        m = await bot.send_message(s.main_group_id, f'ANTIJAVANA CHAT removed {_display_name(user)}')
+        await track(s.main_group_id, m.message_id, getattr(user, 'id', None), 'justice_removed_notification', False)
+    except Exception as e:
+        await log_error('justice_visible_remove_notice', e)
+
 async def candidate_count() -> int:
     sid = int(await st.get_value('active_session_id','0') or '0')
     protected_ids = await _protected_ids()
@@ -122,8 +146,13 @@ async def execute_justice(bot:Bot, manual:bool=False):
             if u.id == int(await st.get_value('bot_id','0') or '0'):
                 continue
             try:
-                await bot.ban_chat_member(s.main_group_id, u.id)
+                # Bot API n'a pas de méthode "kick visible" séparée : le retrait
+                # fiable se fait par ban puis unban. Certaines configurations Telegram
+                # n'affichent pas la notification système de retrait ; on publie donc
+                # une notification visible dédiée juste après le retrait.
+                await bot.ban_chat_member(s.main_group_id, u.id, revoke_messages=False)
                 await bot.unban_chat_member(s.main_group_id, u.id, only_if_banned=True)
+                await _send_visible_justice_removal(bot, u)
                 u2=await db.get(User,u.id)
                 if u2: u2.is_banned=True
                 removed+=1
