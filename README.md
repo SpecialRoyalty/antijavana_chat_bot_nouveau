@@ -27,3 +27,9 @@ V25 corrige ça :
 - justice auto et manuelle appliquent exactement la même limite ;
 - Santé affiche la limite et le nombre de justifiables actuels ;
 - rapport admin après justice : éligibles / supprimés / reportés / limite.
+
+## V26 — Justice visible
+
+Correction justice populaire : Telegram ne garantit pas une notification système visible quand un bot retire un membre via l'API. La V26 conserve le retrait réel par ban/unban, mais ajoute une notification publique courte `ANTIJAVANA CHAT removed @pseudo` pour chaque membre retiré.
+
+Ces notifications sont suivies en base avec `kind='justice_removed_notification'` et restent visibles pendant les 5 minutes de justice. Elles sont supprimées automatiquement lors du nettoyage de fermeture.
