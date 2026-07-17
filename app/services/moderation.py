@@ -2,255 +2,156 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta
-from typing import Dict, List, Set, Tuple
 
 from aiogram import Bot
-from aiogram.types import Message
+from aiogram.types import ChatPermissions, Message
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.db.models import MediaHash, User, WordRule
+from app.db.models import User, WordRule
 from app.db.session import SessionLocal
 from app.services import settings as st
-from app.services.hashban import file_sha256
+from app.services.hashban import (
+    find_banned_hash,
+    media_file_entries,
+    record_repost_verification,
+    store_message_hashes,
+)
 from app.services.state import log_error, track
 from app.services.users import display_name, protected
 
 
 def has_link(text: str) -> bool:
-    return bool(re.search(r'(https?://|t\.me/|www\.|\.com\b|\.net\b|\.io\b)', text or '', re.I))
+    return bool(re.search(r"(https?://|t\.me/|www\.|\.com\b|\.net\b|\.io\b)", text or "", re.I))
 
 
 def has_mention(text: str) -> bool:
-    return '@' in (text or '')
+    return "@" in (text or "")
 
 
 def has_command(text: str) -> bool:
-    return (text or '').strip().startswith('/')
+    return (text or "").strip().startswith("/")
 
 
 def is_media(msg: Message) -> bool:
-    return bool(msg.photo or msg.video or msg.document or msg.animation or msg.audio or msg.voice or msg.video_note)
+    return bool(media_file_entries(msg))
 
 
-def file_ids(msg: Message) -> list[tuple[str, str, str]]:
-    if msg.photo:
-        return [(msg.photo[-1].file_unique_id, msg.photo[-1].file_id, 'photo')]
-    if msg.video:
-        return [(msg.video.file_unique_id, msg.video.file_id, 'video')]
-    if msg.document:
-        return [(msg.document.file_unique_id, msg.document.file_id, 'document')]
-    if msg.animation:
-        return [(msg.animation.file_unique_id, msg.animation.file_id, 'animation')]
-    if msg.video_note:
-        return [(msg.video_note.file_unique_id, msg.video_note.file_id, 'video_note')]
-    return []
-
-
-# Best-effort in-memory album tracking.
-# Telegram sends album items as separate messages with the same media_group_id.
-# The DB schema has no media_group_id column, so we keep a runtime cache to delete
-# already-seen sibling messages and block future sibling messages in the same album.
-_MEDIA_GROUP_MESSAGES: Dict[Tuple[int, str], List[int]] = {}
-_BLOCKED_MEDIA_GROUPS: Set[Tuple[int, str]] = set()
-
-
-def _album_key(msg: Message) -> tuple[int, str] | None:
-    if not getattr(msg, 'media_group_id', None):
-        return None
-    return (msg.chat.id, str(msg.media_group_id))
-
-
-def _remember_album_message(msg: Message) -> None:
-    key = _album_key(msg)
-    if not key:
-        return
-    ids = _MEDIA_GROUP_MESSAGES.setdefault(key, [])
-    if msg.message_id not in ids:
-        ids.append(msg.message_id)
-    # Prevent unbounded growth in long-running processes.
-    if len(_MEDIA_GROUP_MESSAGES) > 1000:
-        _MEDIA_GROUP_MESSAGES.clear()
-        _BLOCKED_MEDIA_GROUPS.clear()
-
-
-async def _delete_album_messages(bot: Bot, msg: Message) -> None:
-    key = _album_key(msg)
-    if not key:
-        await delete(bot, msg)
-        return
-
-    _BLOCKED_MEDIA_GROUPS.add(key)
-    ids = list(dict.fromkeys(_MEDIA_GROUP_MESSAGES.get(key, []) + [msg.message_id]))
-    for mid in ids:
-        try:
-            await bot.delete_message(msg.chat.id, mid)
-        except Exception:
-            pass
+def file_ids(msg: Message):
+    """Compatibilité avec les autres modules existants."""
+    return media_file_entries(msg)
 
 
 async def words(kind: str) -> list[str]:
     async with SessionLocal() as db:
-        res = await db.execute(select(WordRule).where(WordRule.kind == kind))
-        return [x.word.lower() for x in res.scalars().all()]
+        result = await db.execute(select(WordRule).where(WordRule.kind == kind))
+        return [row.word.lower() for row in result.scalars().all()]
 
 
 async def text_has_word(kind: str, text: str) -> bool:
-    t = (text or '').lower()
-    return any(w and w in t for w in await words(kind))
+    lowered = (text or "").lower()
+    return any(word and word in lowered for word in await words(kind))
 
 
-async def restrict(bot: Bot, chat_id: int, user_id: int, days: int):
+async def restrict(bot: Bot, chat_id: int, user_id: int, days: int) -> bool:
     if await protected(user_id):
-        return
+        return False
     until = datetime.utcnow() + timedelta(days=days)
     try:
         await bot.restrict_chat_member(
             chat_id,
             user_id,
-            permissions={'can_send_messages': False},
+            permissions=ChatPermissions(can_send_messages=False),
             until_date=until,
         )
         async with SessionLocal() as db:
-            u = await db.get(User, user_id)
-            if u:
-                u.is_restricted = True
+            user = await db.get(User, user_id)
+            if user:
+                user.is_restricted = True
             await db.commit()
-    except Exception as e:
-        await log_error('restrict', e)
+        return True
+    except Exception as exc:
+        await log_error("restrict", exc)
+        return False
 
 
-async def ban(bot: Bot, chat_id: int, user_id: int):
+async def ban(bot: Bot, chat_id: int, user_id: int) -> bool:
     if await protected(user_id):
-        return
+        return False
     try:
         await bot.ban_chat_member(chat_id, user_id)
         async with SessionLocal() as db:
-            u = await db.get(User, user_id)
-            if u:
-                u.is_banned = True
+            user = await db.get(User, user_id)
+            if user:
+                user.is_banned = True
             await db.commit()
-    except Exception as e:
-        await log_error('ban', e)
+        return True
+    except Exception as exc:
+        await log_error("ban", exc)
+        return False
 
 
-async def delete(bot: Bot, msg: Message):
+async def delete(bot: Bot, msg: Message) -> bool:
     try:
         await bot.delete_message(msg.chat.id, msg.message_id)
-    except Exception:
-        pass
+        return True
+    except Exception as exc:
+        await log_error("delete_message", exc)
+        return False
 
 
-async def _upsert_media_hash(
-    *,
-    user_id: int | None,
-    key: str,
-    file_id: str,
-    media_type: str,
-    banned: bool,
-) -> None:
-    async with SessionLocal() as db:
-        old = await db.execute(select(MediaHash).where(MediaHash.file_unique_id == key))
-        mh = old.scalar_one_or_none()
-        if not mh:
-            mh = MediaHash(
-                user_id=user_id,
-                file_unique_id=key,
-                file_id=file_id,
-                media_type=media_type,
-                banned=banned,
-            )
-            db.add(mh)
-        else:
-            # Keep the latest file_id/type for operational reuse.
-            mh.file_id = file_id
-            mh.media_type = media_type
-            if user_id is not None and mh.user_id is None:
-                mh.user_id = user_id
-            if banned:
-                mh.banned = True
-        await db.commit()
+async def record_media(msg: Message, bot: Bot | None = None, banned: bool = False) -> int:
+    """Enregistre le média. Avec bot, l'ID Telegram et le SHA256 sont stockés."""
+    if bot is None:
+        # Compatibilité prudente : sans Bot, impossible de calculer le SHA256.
+        from app.db.models import MediaHash
 
-
-async def record_media(msg: Message, banned: bool = False, bot: Bot | None = None):
-    """Record all media keys for a message.
-
-    Previous bug: only file_unique_id was stored here. Now we also store SHA256
-    whenever a bot instance is provided. /pedo and normal media intake should pass bot.
-    """
-    entries = file_ids(msg)
-    if not entries:
-        return
-
-    user_id = msg.from_user.id if msg.from_user else None
-
-    for unique, file_id, typ in entries:
-        await _upsert_media_hash(
-            user_id=user_id,
-            key=unique,
-            file_id=file_id,
-            media_type=typ,
-            banned=banned,
-        )
-
-        if bot:
-            sha = await file_sha256(bot, file_id)
-            if sha:
-                await _upsert_media_hash(
-                    user_id=user_id,
-                    key=sha,
-                    file_id=file_id,
-                    media_type=typ,
-                    banned=banned,
-                )
-
-    # Count one media message only once, not once per hash key.
-    if user_id and not banned:
+        entries = media_file_entries(msg)
         async with SessionLocal() as db:
-            u = await db.get(User, user_id)
-            if u:
-                u.media_count += 1
-                u.last_media_session = int(await st.get_value('active_session_id', '0') or '0')
+            for unique, file_id, media_type in entries:
+                result = await db.execute(select(MediaHash).where(MediaHash.file_unique_id == unique))
+                row = result.scalar_one_or_none()
+                if row is None:
+                    db.add(MediaHash(
+                        user_id=msg.from_user.id if msg.from_user else None,
+                        file_unique_id=unique,
+                        file_id=file_id,
+                        media_type=media_type,
+                        banned=banned,
+                    ))
+                elif banned:
+                    row.banned = True
             await db.commit()
+        stored = len(entries)
+    else:
+        stored = await store_message_hashes(msg, bot, banned=banned)
+
+    if msg.from_user and not banned and media_file_entries(msg):
+        async with SessionLocal() as db:
+            user = await db.get(User, msg.from_user.id)
+            if user:
+                user.media_count += 1
+                user.last_media_session = int(await st.get_value("active_session_id", "0") or "0")
+            await db.commit()
+    return stored
 
 
 async def contains_banned_hash(bot: Bot, msg: Message) -> bool:
-    entries = file_ids(msg)
-    ids = [x[0] for x in entries]
-    for _unique, file_id, _typ in entries:
-        sha = await file_sha256(bot, file_id)
-        if sha:
-            ids.append(sha)
-
-    if not ids:
-        return False
-
-    async with SessionLocal() as db:
-        res = await db.execute(
-            select(MediaHash).where(
-                MediaHash.file_unique_id.in_(ids),
-                MediaHash.banned == True,  # noqa: E712
-            )
-        )
-        return res.scalar_one_or_none() is not None
+    """Compatibilité : retourne seulement un booléen."""
+    return (await find_banned_hash(bot, msg)).matched
 
 
 async def moderate_message(bot: Bot, msg: Message) -> bool:
-    """Moderate a group message.
-
-    Returns True if later handlers may continue processing/copying the message.
-    Returns False if the message was deleted, restricted, banned, or otherwise blocked.
-    """
+    """Retourne True seulement si le pipeline peut continuer vers la copie VIP."""
     if not msg.from_user:
-        return True
+        return False
 
-    await track(msg.chat.id, msg.message_id, msg.from_user.id, 'message', is_media(msg))
-
+    await track(msg.chat.id, msg.message_id, msg.from_user.id, "message", is_media(msg))
     if msg.chat.id != get_settings().main_group_id:
         return True
 
     uid = msg.from_user.id
-    text = msg.text or msg.caption or ''
+    text = msg.text or msg.caption or ""
     trusted = uid in get_settings().trusted_ids
     admin = uid in get_settings().admin_ids
 
@@ -259,22 +160,23 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
         return False
 
     if is_media(msg):
-        _remember_album_message(msg)
-        key = _album_key(msg)
-        if key and key in _BLOCKED_MEDIA_GROUPS:
-            await delete(bot, msg)
-            await ban(bot, msg.chat.id, uid)
+        match = await find_banned_hash(bot, msg)
+        if match.matched:
+            deleted = await delete(bot, msg)
+            user_banned = await ban(bot, msg.chat.id, uid)
+            await record_repost_verification(
+                match=match,
+                deleted=deleted,
+                user_banned=user_banned,
+                pipeline_stopped=True,
+                user_id=uid,
+                chat_id=msg.chat.id,
+                message_id=msg.message_id,
+            )
             return False
-
-        if await contains_banned_hash(bot, msg):
-            await _delete_album_messages(bot, msg)
-            await ban(bot, msg.chat.id, uid)
-            return False
-
-        # Record normal media with both file_unique_id and SHA256 before any later logic.
         await record_media(msg, bot=bot)
 
-    # Links are forbidden for everyone except admins; trusted message is deleted without sanction.
+    # Liens interdits pour tout le monde sauf admins ; trusted supprimé sans sanction.
     if has_link(text):
         await delete(bot, msg)
         if not (trusted or admin):
@@ -299,26 +201,26 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
         await restrict(bot, msg.chat.id, uid, 2)
         return False
 
-    if await text_has_word('ban', text):
+    if await text_has_word("ban", text):
         await delete(bot, msg)
         await ban(bot, msg.chat.id, uid)
         return False
 
-    if await text_has_word('forbidden', text):
+    if await text_has_word("forbidden", text):
         await delete(bot, msg)
         await restrict(bot, msg.chat.id, uid, 1)
         return False
 
     if text and not is_media(msg):
         async with SessionLocal() as db:
-            u = await db.get(User, uid)
-            if u and u.media_count <= 0:
+            user = await db.get(User, uid)
+            if user and user.media_count <= 0:
                 await delete(bot, msg)
-                warn = await bot.send_message(
+                warning = await bot.send_message(
                     msg.chat.id,
-                    f'{display_name(msg.from_user)}, envoie d’abord un média avant d’écrire.',
+                    f"{display_name(msg.from_user)}, envoie d’abord un média avant d’écrire.",
                 )
-                await track(msg.chat.id, warn.message_id, None, 'temp', False)
+                await track(msg.chat.id, warning.message_id, None, "temp", False)
                 return False
 
     return True

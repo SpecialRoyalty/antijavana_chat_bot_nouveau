@@ -7,6 +7,7 @@ from app.services import settings as st
 from app.utils.time import mid_time, slot_times, next_open_text, next_status_update_text
 from app.services.freepass import reserved_count, places as freepass_places, remaining_places, is_locked as freepass_locked, published_session_key
 from app.services.justice import candidate_count
+from app.services.hashban import hashban_health_text
 
 async def health_text(bot:Bot):
     s=get_settings(); slot=await st.time_slot(); start,end=slot_times(slot,s.timezone)
@@ -52,6 +53,8 @@ Messages suivis non supprimés: {tracked}
 Comptes suspects: {suspects}
 Paiements VIP en attente: {vip_pending}
 Erreurs loggées: {errors}
+
+{await hashban_health_text()}
 
 Diffusions planifiées:
 Publicité — dernier envoi: {await st.get_value('last_ad_sent_at','jamais')} — prochain: automatique pendant ouverture
