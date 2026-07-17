@@ -17,7 +17,7 @@ from app.db.models import WordRule
 from app.services.justice import justice_preview_text, execute_justice, candidate_count
 import asyncio
 from aiogram.exceptions import TelegramBadRequest
-from app.services.hashban import ban_hash_from_message, banned_hash_count
+from app.services.hashban import ban_hash_from_message, banned_hash_count, hashban_health_text
 from app.services.freepass import free_pass_admin_kb, free_pass_admin_kb_async, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current, reserve_free_pass, refresh_free_pass_message, is_locked as freepass_is_locked, in_admin_config_window as freepass_window_open, delete_free_pass_campaign
 router=Router()
 
@@ -327,7 +327,9 @@ async def cb_top_health(cb:CallbackQuery):
 
 @router.callback_query(F.data=='hashban_stats')
 async def cb_hashban_stats(cb:CallbackQuery):
-    if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(f'🚫 Hash bannis : {await banned_hash_count()}'); await cb.answer()
+    if cb.from_user and is_admin(cb.from_user.id):
+        await cb.message.answer(await hashban_health_text())
+        await cb.answer()
 
 
 @router.callback_query(F.data=='freepass_toggle')
