@@ -23,12 +23,12 @@ async def vip_group_kb():
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text='🎟 Pass soirée', url=f'https://t.me/{username}?start=vip_soiree')],
             [InlineKeyboardButton(text='📦 Pass total', url=f'https://t.me/{username}?start=vip_total')],
-            [InlineKeyboardButton(text='💎 VIP ANTIJAVANA', url=f'https://t.me/{username}?start=vip_javana')],
+            [InlineKeyboardButton(text='💎 COPIE 1:1 VIP JAVANA -50%', url=f'https://t.me/{username}?start=vip_javana')],
         ])
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='🎟 Pass soirée', callback_data='vip_offer:soiree')],
         [InlineKeyboardButton(text='📦 Pass total', callback_data='vip_offer:total')],
-        [InlineKeyboardButton(text='💎 VIP ANTIJAVANA', callback_data='vip_offer:javana')],
+        [InlineKeyboardButton(text='💎 COPIE 1:1 VIP JAVANA -50%', callback_data='vip_offer:javana')],
     ])
 
 async def user_cart(user_id:int)->set[str]:
