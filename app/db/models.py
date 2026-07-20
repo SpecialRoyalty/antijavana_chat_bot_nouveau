@@ -30,6 +30,18 @@ class User(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
     last_seen: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
 
+
+
+class PrivateSubscriber(Base):
+    __tablename__='private_subscribers'
+    user_id: Mapped[int]=mapped_column(BigInteger, primary_key=True)
+    username: Mapped[str|None]=mapped_column(String(255), nullable=True)
+    full_name: Mapped[str]=mapped_column(String(512), default='')
+    active: Mapped[bool]=mapped_column(Boolean, default=True, index=True)
+    started_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
+    last_start_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
+    last_broadcast_at: Mapped[datetime|None]=mapped_column(DateTime, nullable=True)
+
 class SessionLog(Base):
     __tablename__='sessions'
     id: Mapped[int]=mapped_column(Integer, primary_key=True, autoincrement=True)
