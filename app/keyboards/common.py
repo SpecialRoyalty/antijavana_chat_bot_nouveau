@@ -15,6 +15,7 @@ def admin_kb():
         [('🎁 Invitations','adm_invites'),('🏆 Top inviteurs','adm_top')],
         [('🛡️ Modération','adm_mod'),('📜 Règles','adm_rules')],
         [('🚫 Hash ban','adm_hashban')],
+        [('📢 Broadcast groupe','adm_broadcast_group'),('📨 Broadcast privé','adm_broadcast_private')],
         [('👑 Grâce prés.','adm_pardon_ban'),('⚖️ Grâce min.','adm_pardon_mute')],
         [('📊 Rapports','adm_reports'),('⚙️ Paramètres','adm_settings')],
     ]
