@@ -6,7 +6,7 @@ from app.config import get_settings
 from app.keyboards.common import admin_kb, goal_kb, settings_kb, justice_kb, cleanup_kb, mod_kb, crowd_admin_kb, ads_admin_kb, confirm_kb, back_kb, rules_admin_kb, hashban_kb, vip_admin_kb, top_admin_kb, invite_admin_kb
 from app.services import settings as st
 from app.services.session_ops import set_group_open, cleanup_session, count_known_bans_and_restrictions, presidential_pardon, ministerial_pardon
-from app.services.state import ensure_status_message
+from app.services.state import ensure_status_message, log_error
 from app.services.health import health_text
 from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private, handle_vip_proof
 from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private, campaigns_kb, campaign_detail, toggle_campaign, delete_campaign, handle_crowd_text, handle_crowd_proof, send_campaign_by_id
@@ -19,6 +19,7 @@ import asyncio
 from aiogram.exceptions import TelegramBadRequest
 from app.services.hashban import ban_hash_from_message, banned_hash_count, hashban_health_text
 from app.services.freepass import free_pass_admin_kb, free_pass_admin_kb_async, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current, reserve_free_pass, refresh_free_pass_message, is_locked as freepass_is_locked, in_admin_config_window as freepass_window_open, delete_free_pass_campaign
+from app.services.broadcast import register_private_start, supported_broadcast_message, broadcast_to_main_group, broadcast_to_private_starters, private_subscriber_count
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
@@ -51,6 +52,7 @@ async def start(msg:Message, bot:Bot):
     if msg.text and len(msg.text.split(maxsplit=1))>1:
         arg=msg.text.split(maxsplit=1)[1].strip()
     if msg.chat.type=='private' and msg.from_user:
+        await register_private_start(msg.from_user)
         if arg.startswith('vip_'):
             offer=arg.split('_',1)[1]
             await send_vip_private(bot, msg.from_user.id, offer if offer in ['soiree','total','javana'] else None)
@@ -103,6 +105,13 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
         b,r=await count_known_bans_and_restrictions(); await cb.message.answer(f'⚖️ Grâce ministérielle\n\nRestrictions connues concernées : {r}\n\nConfirmer la levée des restrictions ?',reply_markup=confirm_kb('pardon_mute'))
     elif d=='adm_reports': await cb.message.answer('📊 Les rapports sont envoyés automatiquement à chaque fermeture, avec actions trusted et inactifs.',reply_markup=back_kb())
     elif d=='adm_hashban': await cb.message.answer('🚫 Hash ban\n\nEnvoie un média en privé pour l’ajouter aux hashes bannis.',reply_markup=hashban_kb())
+    elif d=='adm_broadcast_group':
+        await set_admin_state(cb.from_user.id, 'broadcast_group')
+        await cb.message.answer('📢 Broadcast groupe principal\n\nEnvoie maintenant :\n• un texte\n• une photo\n• une photo avec légende\n\nLe message sera publié immédiatement dans le groupe principal.')
+    elif d=='adm_broadcast_private':
+        count=await private_subscriber_count()
+        await set_admin_state(cb.from_user.id, 'broadcast_private')
+        await cb.message.answer(f'📨 Broadcast privé\n\nDestinataires actifs : {count}\n\nEnvoie maintenant :\n• un texte\n• une photo\n• une photo avec légende\n\nLe message sera envoyé immédiatement aux personnes ayant fait /start en privé.')
     elif d=='adm_settings': await cb.message.answer('⚙️ Paramètres\nHoraires + limite justice populaire.',reply_markup=settings_kb())
     await cb.answer()
 
@@ -416,6 +425,30 @@ async def admin_text_state(msg:Message, bot:Bot):
 
     state=await get_admin_state(msg.from_user.id)
     if not state:
+        return
+    if state in ('broadcast_group', 'broadcast_private'):
+        if not supported_broadcast_message(msg):
+            await msg.answer('Format refusé. Envoie uniquement un texte, une photo, ou une photo avec légende.')
+            return
+        await clear_admin_state(msg.from_user.id)
+        if state=='broadcast_group':
+            try:
+                message_id=await broadcast_to_main_group(bot, msg)
+                await msg.answer(f'✅ Broadcast publié dans le groupe principal.\nMessage : {message_id}', reply_markup=admin_kb())
+            except Exception as exc:
+                await log_error('broadcast_group', exc)
+                await msg.answer(f'❌ Échec du broadcast groupe : {type(exc).__name__}', reply_markup=admin_kb())
+            return
+        await msg.answer('⏳ Broadcast privé en cours…')
+        stats=await broadcast_to_private_starters(bot, msg)
+        await msg.answer(
+            '✅ Broadcast privé terminé\n\n'
+            f'Destinataires : {stats["total"]}\n'
+            f'Envoyés : {stats["sent"]}\n'
+            f'Bot bloqué : {stats["blocked"]}\n'
+            f'Erreurs : {stats["errors"]}',
+            reply_markup=admin_kb(),
+        )
         return
     if state=='goal':
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
