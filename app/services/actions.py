@@ -5,7 +5,12 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.db.models import TrackedMessage, TrustedAction
 from app.db.session import SessionLocal
-from app.services.hashban import ban_hash_from_message
+from app.services.hashban import (
+    audit_hashes,
+    ensure_hashes_banned,
+    format_hash_audit,
+    split_telegram_text,
+)
 from app.services.moderation import ban, delete, restrict
 from app.services.state import log_error
 
@@ -15,7 +20,7 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
         return False
 
     cmd = (msg.text or "").split()[0].lower()
-    if cmd not in ["/supprime", "/mineur", "/pasfr", "/pedo", "/clean", "/info"]:
+    if cmd not in ["/supprime", "/mineur", "/pasfr", "/pedo", "/hashdemande", "/clean", "/info"]:
         return False
 
     try:
@@ -56,6 +61,20 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
         )
         return True
 
+    if cmd == "/hashdemande":
+        if not target:
+            await bot.send_message(msg.from_user.id, "Réponds à un média ou à un élément d’album avec /hashdemande.")
+            return True
+        entries = await audit_hashes(bot, target)
+        report = format_hash_audit(entries, title="🔍 DEMANDE DE VÉRIFICATION HASH")
+        for admin_id in get_settings().admin_ids:
+            for chunk in split_telegram_text(report):
+                try:
+                    await bot.send_message(admin_id, chunk)
+                except Exception as exc:
+                    await log_error("hashdemande_send", exc)
+        return True
+
     if not target:
         return True
 
@@ -74,9 +93,25 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
         if uid:
             # Le média ciblé est blacklisté AVANT sa suppression : ID Telegram + SHA256.
             try:
-                await ban_hash_from_message(target, bot)
+                fingerprints, audits = await ensure_hashes_banned(bot, target)
+                report = format_hash_audit(
+                    audits,
+                    title=f"🚫 /PEDO — BLACKLIST CONFIRMÉE ({fingerprints} empreinte(s))",
+                )
+                for chunk in split_telegram_text(report):
+                    try:
+                        await bot.send_message(msg.from_user.id, chunk)
+                    except Exception as send_exc:
+                        await log_error("pedo_hash_report", send_exc)
             except Exception as exc:
                 await log_error("pedo_hashban", exc)
+                try:
+                    await bot.send_message(
+                        msg.from_user.id,
+                        "🔴 /pedo : le bannissement utilisateur continue, mais la mise en blacklist du média a échoué. Consulte les logs avant de considérer le hash comme protégé.",
+                    )
+                except Exception:
+                    pass
 
             await ban(bot, msg.chat.id, uid)
 
