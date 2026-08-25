@@ -30,6 +30,7 @@ from app.services.freepass import free_pass_admin_kb, free_pass_admin_kb_async, 
 from app.services.broadcast import register_private_start, supported_broadcast_message, broadcast_to_main_group, broadcast_to_private_starters, private_subscriber_count
 from app.services.anti_fast_join import health_text as fast_join_health_text
 from app.services.anti_repost import health_text as anti_repost_health_text
+from app.services.moderation import invalidate_word_cache
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
@@ -522,6 +523,7 @@ async def admin_text_state(msg:Message, bot:Bot):
         word=(msg.text or '').strip().lower()
         if word:
             async with SessionLocal() as db: db.add(WordRule(kind=kind,word=word)); await db.commit()
+            invalidate_word_cache(kind)
             await msg.answer(f'✅ Ajouté dans {kind}: {word}',reply_markup=mod_kb())
     elif state=='rules_text':
         await st.set_value('rules_text',msg.text or ''); await msg.answer('✅ Règles sauvegardées.',reply_markup=admin_kb())
