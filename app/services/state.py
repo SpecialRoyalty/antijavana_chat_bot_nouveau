@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from sqlalchemy import select, func
+import time
+from sqlalchemy import select, func, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramServerError
 from app.config import get_settings
@@ -9,6 +11,9 @@ from app.db.models import Vote, TrackedMessage, ErrorLog
 from app.services import settings as st
 from app.utils.time import day_key, countdown_text, in_slot, slot_times
 from app.keyboards.common import vote_kb
+
+_STATUS_VERIFY_EVERY_SECONDS = 300.0
+_STATUS_LAST_VERIFY: dict[int, float] = {}
 
 async def log_error(area,msg):
     logging.exception('%s: %s',area,msg) if isinstance(msg,Exception) else logging.error('%s: %s',area,msg)
@@ -24,11 +29,17 @@ async def vote_count(chat_id:int):
         return int(res.scalar() or 0)
 
 async def add_vote(chat_id:int,user_id:int):
-    s=get_settings()
+    s=get_settings(); today=day_key(s.timezone)
     async with SessionLocal() as db:
-        exists=await db.execute(select(Vote).where(Vote.chat_id==chat_id,Vote.user_id==user_id,Vote.day_key==day_key(s.timezone)))
-        if exists.scalar_one_or_none(): return False
-        db.add(Vote(chat_id=chat_id,user_id=user_id,day_key=day_key(s.timezone))); await db.commit(); return True
+        stmt=(
+            pg_insert(Vote)
+            .values(chat_id=chat_id,user_id=user_id,day_key=today)
+            .on_conflict_do_nothing(constraint='uq_vote_day')
+            .returning(Vote.id)
+        )
+        inserted=(await db.execute(stmt)).scalar_one_or_none()
+        await db.commit()
+        return inserted is not None
 
 async def status_text(chat_id:int):
     goal=await st.vote_goal(); votes=await vote_count(chat_id); slot=await st.time_slot(); s=get_settings()
@@ -52,17 +63,21 @@ async def status_text(chat_id:int):
     return f'🔴 GROUPE FERMÉ\n\nOuverture prévue à {opening}.\nTemps restant : {remaining}\n\nObjectif :\n{votes} / {goal} votes\n\nIl manque encore {missing} votes.'
 
 async def track(chat_id:int,message_id:int,user_id:int|None,kind='message',is_media=False):
+    sid=int(await st.get_value('active_session_id','0') or '0')
     async with SessionLocal() as db:
-        sid=int(await st.get_value('active_session_id','0') or '0')
-        existing=(await db.execute(select(TrackedMessage).where(TrackedMessage.chat_id==chat_id,TrackedMessage.message_id==message_id))).scalar_one_or_none()
-        if not existing:
-            db.add(TrackedMessage(chat_id=chat_id,message_id=message_id,user_id=user_id,session_id=sid,kind=kind,is_media=is_media))
-            if sid and kind!='status':
-                from app.db.models import SessionLog
-                sess=await db.get(SessionLog,sid)
-                if sess:
-                    sess.messages_seen += 1
-                    if is_media: sess.media_seen += 1
+        stmt=(
+            pg_insert(TrackedMessage)
+            .values(chat_id=chat_id,message_id=message_id,user_id=user_id,session_id=sid,kind=kind,is_media=is_media)
+            .on_conflict_do_nothing(constraint='uq_tracked_message')
+            .returning(TrackedMessage.id)
+        )
+        inserted=(await db.execute(stmt)).scalar_one_or_none()
+        if inserted is not None and sid and kind!='status':
+            from app.db.models import SessionLog
+            values={'messages_seen': SessionLog.messages_seen + 1}
+            if is_media:
+                values['media_seen']=SessionLog.media_seen + 1
+            await db.execute(update(SessionLog).where(SessionLog.id==sid).values(**values))
         await db.commit()
 
 async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=False):
@@ -101,8 +116,16 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
             raise
 
     if mid:
+        # Si le texte n'a pas changé, évite un edit Telegram inutile à chaque tick.
+        # On force tout de même une vérification périodique pour recréer le message
+        # s'il a été supprimé manuellement hors du bot.
+        now_mono=time.monotonic()
+        last_verify=_STATUS_LAST_VERIFY.get(chat_id,0.0)
+        if last_text == text and now_mono-last_verify < _STATUS_VERIFY_EVERY_SECONDS:
+            return int(mid)
         try:
             await bot.edit_message_text(text, chat_id=chat_id, message_id=int(mid), reply_markup=kb)
+            _STATUS_LAST_VERIFY[chat_id]=now_mono
             from datetime import datetime
             await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
             await st.set_value('status_last_text', text)
@@ -110,6 +133,7 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
         except TelegramBadRequest as e:
             low=str(e).lower()
             if 'message is not modified' in low:
+                _STATUS_LAST_VERIFY[chat_id]=time.monotonic()
                 return int(mid)
             if 'message to edit not found' in low:
                 mid=''
@@ -129,15 +153,39 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
     from datetime import datetime
     await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
     await track(chat_id,m.message_id,None,'status',False)
+    _STATUS_LAST_VERIFY[chat_id]=time.monotonic()
     await cleanup_known_status_duplicates(bot, chat_id)
     return m.message_id
 
 async def cleanup_known_status_duplicates(bot:Bot, chat_id:int):
     keep=int(await st.get_value('status_message_id','0') or '0')
     async with SessionLocal() as db:
-        res=await db.execute(select(TrackedMessage).where(TrackedMessage.chat_id==chat_id,TrackedMessage.kind=='status',TrackedMessage.deleted==False))
-        for tm in res.scalars().all():
-            if tm.message_id!=keep:
-                try: await bot.delete_message(chat_id,tm.message_id); tm.deleted=True
-                except Exception: pass
-        await db.commit()
+        rows=list((await db.execute(
+            select(TrackedMessage.id,TrackedMessage.message_id).where(
+                TrackedMessage.chat_id==chat_id,
+                TrackedMessage.kind=='status',
+                TrackedMessage.deleted.is_(False),
+                TrackedMessage.message_id!=keep,
+            )
+        )).all())
+    if not rows:
+        return
+    semaphore=asyncio.Semaphore(4)
+    async def remove(row):
+        row_id,message_id=row
+        async with semaphore:
+            try:
+                await bot.delete_message(chat_id,message_id)
+                return row_id
+            except TelegramBadRequest as e:
+                low=str(e).lower()
+                if 'message to delete not found' in low or 'message identifier is not specified' in low:
+                    return row_id
+                return None
+            except Exception:
+                return None
+    removed=[rid for rid in await asyncio.gather(*(remove(row) for row in rows)) if rid is not None]
+    if removed:
+        async with SessionLocal() as db:
+            await db.execute(update(TrackedMessage).where(TrackedMessage.id.in_(removed)).values(deleted=True))
+            await db.commit()

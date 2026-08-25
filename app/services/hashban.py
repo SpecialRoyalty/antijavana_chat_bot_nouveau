@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import subprocess
@@ -21,6 +22,7 @@ from app.services.state import log_error
 _ALBUM_CACHE: dict[tuple[int, str], list[Message]] = {}
 _ALBUM_CACHE_AT: dict[tuple[int, str], float] = {}
 _ALBUM_TTL_SECONDS = 6 * 60 * 60
+_ALBUM_NEXT_CLEANUP_AT = 0.0
 
 # Seuils prudents : le fingerprint sert à reconnaître une vidéo réencodée,
 # tout en limitant les faux positifs.
@@ -28,6 +30,17 @@ _DURATION_TOLERANCE_SECONDS = 3
 _ASPECT_RATIO_TOLERANCE = 0.08
 _MAX_AVERAGE_HAMMING = 9.0
 _MAX_SINGLE_FRAME_HAMMING = 20
+
+# Blacklist brièvement mise en cache : les contrôles par ID n'ouvrent plus une
+# connexion PostgreSQL pour chaque média et les fingerprints vidéo bannis ne
+# sont plus relus intégralement à chaque vidéo.
+_BANNED_CACHE_TTL = 30.0
+_BANNED_EXACT_CACHE: set[str] | None = None
+_BANNED_EXACT_CACHE_AT = 0.0
+_BANNED_VIDEO_CACHE: list[tuple[str, int | None, int | None, int | None]] | None = None
+_BANNED_VIDEO_CACHE_AT = 0.0
+# FFmpeg reste volontairement limité : Railway gagne en réactivité sans saturer le CPU.
+_FFMPEG_SEMAPHORE = asyncio.Semaphore(1)
 
 
 @dataclass(slots=True)
@@ -37,6 +50,16 @@ class HashBanMatch:
     key: str | None = None
     media_type: str | None = None
     similarity: float | None = None
+
+
+@dataclass(slots=True)
+class MediaProbe:
+    path: str
+    file_id: str
+    media_type: str
+    sha256: str | None
+    perceptual_hash: str | None = None
+    perceptual_computed: bool = False
 
 
 @dataclass(slots=True)
@@ -95,12 +118,15 @@ def _media_metadata(msg: Message) -> tuple[int | None, int | None, int | None, i
 
 
 def remember_media_message(msg: Message) -> None:
+    global _ALBUM_NEXT_CLEANUP_AT
     if not msg.media_group_id or not media_file_entries(msg):
         return
     now = time.monotonic()
-    for key in [k for k, at in _ALBUM_CACHE_AT.items() if now - at > _ALBUM_TTL_SECONDS]:
-        _ALBUM_CACHE.pop(key, None)
-        _ALBUM_CACHE_AT.pop(key, None)
+    if now >= _ALBUM_NEXT_CLEANUP_AT:
+        for key in [k for k, at in _ALBUM_CACHE_AT.items() if now - at > _ALBUM_TTL_SECONDS]:
+            _ALBUM_CACHE.pop(key, None)
+            _ALBUM_CACHE_AT.pop(key, None)
+        _ALBUM_NEXT_CLEANUP_AT = now + 60.0
     key = (msg.chat.id, str(msg.media_group_id))
     items = _ALBUM_CACHE.setdefault(key, [])
     if all(existing.message_id != msg.message_id for existing in items):
@@ -145,7 +171,7 @@ async def file_sha256(bot: Bot, file_id: str) -> str | None:
     if not path:
         return None
     try:
-        return _sha256_path(path)
+        return await asyncio.to_thread(_sha256_path, path)
     except Exception as exc:
         await log_error("hashban_sha256", exc)
         return None
@@ -268,7 +294,10 @@ async def _video_fingerprint_from_file(
     path: str, duration: int | None
 ) -> str | None:
     try:
-        return _fingerprint_key(_video_frame_hashes(path, duration))
+        # subprocess.run + PIL sont bloquants : on les sort de la boucle asyncio.
+        async with _FFMPEG_SEMAPHORE:
+            hashes = await asyncio.to_thread(_video_frame_hashes, path, duration)
+        return _fingerprint_key(hashes)
     except Exception as exc:
         await log_error("hashban_video_fingerprint", exc)
         return None
@@ -308,50 +337,162 @@ async def _upsert_video_fingerprint(
     return len(rows)
 
 
-async def _compute_all(bot: Bot, msg: Message) -> tuple[str | None, str | None]:
+def invalidate_banned_cache() -> None:
+    global _BANNED_EXACT_CACHE, _BANNED_EXACT_CACHE_AT, _BANNED_VIDEO_CACHE, _BANNED_VIDEO_CACHE_AT
+    _BANNED_EXACT_CACHE = None
+    _BANNED_VIDEO_CACHE = None
+    _BANNED_EXACT_CACHE_AT = 0.0
+    _BANNED_VIDEO_CACHE_AT = 0.0
+
+
+async def _banned_exact_keys() -> set[str]:
+    global _BANNED_EXACT_CACHE, _BANNED_EXACT_CACHE_AT
+    now = time.monotonic()
+    if _BANNED_EXACT_CACHE is not None and now - _BANNED_EXACT_CACHE_AT < _BANNED_CACHE_TTL:
+        return _BANNED_EXACT_CACHE
+    async with SessionLocal() as db:
+        values = set((await db.execute(
+            select(MediaHash.file_unique_id).where(MediaHash.banned.is_(True))
+        )).scalars().all())
+    _BANNED_EXACT_CACHE = values
+    _BANNED_EXACT_CACHE_AT = now
+    return values
+
+
+async def _banned_video_rows() -> list[tuple[str, int | None, int | None, int | None]]:
+    global _BANNED_VIDEO_CACHE, _BANNED_VIDEO_CACHE_AT
+    now = time.monotonic()
+    if _BANNED_VIDEO_CACHE is not None and now - _BANNED_VIDEO_CACHE_AT < _BANNED_CACHE_TTL:
+        return _BANNED_VIDEO_CACHE
+    async with SessionLocal() as db:
+        rows = list((await db.execute(
+            select(VideoFingerprint.fingerprint, VideoFingerprint.duration, VideoFingerprint.width, VideoFingerprint.height)
+            .where(VideoFingerprint.banned.is_(True))
+        )).all())
+    _BANNED_VIDEO_CACHE = rows
+    _BANNED_VIDEO_CACHE_AT = now
+    return rows
+
+
+
+async def open_media_probe(bot: Bot, msg: Message) -> MediaProbe | None:
     entries = media_file_entries(msg)
     if not entries:
-        return None, None
+        return None
     _unique, file_id, media_type = entries[0]
-    suffix = ".mp4" if media_type in {"video", "video_note", "animation"} else ".bin"
+    suffix = '.mp4' if media_type in {'video', 'video_note', 'animation'} else '.bin'
     path = await _download_to_temp(bot, file_id, suffix)
     if not path:
+        return None
+    try:
+        sha = await asyncio.to_thread(_sha256_path, path)
+    except Exception as exc:
+        await log_error('hashban_sha256', exc)
+        sha = None
+    return MediaProbe(path=path, file_id=file_id, media_type=media_type, sha256=sha)
+
+
+async def ensure_probe_perceptual(probe: MediaProbe, msg: Message) -> str | None:
+    if probe.perceptual_computed:
+        return probe.perceptual_hash
+    probe.perceptual_computed = True
+    if probe.media_type not in {'video', 'video_note', 'animation'}:
+        return None
+    duration = _media_metadata(msg)[1]
+    probe.perceptual_hash = await _video_fingerprint_from_file(probe.path, duration)
+    return probe.perceptual_hash
+
+
+def close_media_probe(probe: MediaProbe | None) -> None:
+    if not probe:
+        return
+    try:
+        os.unlink(probe.path)
+    except OSError:
+        pass
+
+
+async def find_banned_id(msg: Message) -> HashBanMatch:
+    banned = await _banned_exact_keys()
+    for unique, _file_id, media_type in media_file_entries(msg):
+        if unique in banned:
+            return HashBanMatch(True, 'file_unique_id', unique, media_type, 100.0)
+    return HashBanMatch()
+
+
+async def find_banned_sha(probe: MediaProbe | None) -> HashBanMatch:
+    if not probe or not probe.sha256:
+        return HashBanMatch()
+    if probe.sha256 in await _banned_exact_keys():
+        return HashBanMatch(True, 'sha256', probe.sha256, probe.media_type, 100.0)
+    return HashBanMatch()
+
+
+async def find_banned_perceptual(probe: MediaProbe | None, msg: Message) -> HashBanMatch:
+    if not probe:
+        return HashBanMatch()
+    fingerprint = await ensure_probe_perceptual(probe, msg)
+    if not fingerprint:
+        return HashBanMatch()
+    _size, duration, width, height = _media_metadata(msg)
+    best: tuple[float, str] | None = None
+    for stored_fp, stored_duration, stored_width, stored_height in await _banned_video_rows():
+        if not _compatible_metadata(duration, width, height, stored_duration, stored_width, stored_height):
+            continue
+        matched, similarity = _compare_fingerprints(fingerprint, stored_fp)
+        if matched and (best is None or similarity > best[0]):
+            best = (similarity, stored_fp)
+    if best:
+        return HashBanMatch(True, 'perceptual_video', best[1], probe.media_type, best[0])
+    return HashBanMatch()
+
+
+async def _compute_all(bot: Bot, msg: Message) -> tuple[str | None, str | None]:
+    probe = await open_media_probe(bot, msg)
+    if not probe:
         return None, None
     try:
-        sha = _sha256_path(path)
-        duration = _media_metadata(msg)[1]
-        perceptual = await _video_fingerprint_from_file(path, duration) if media_type in {"video", "video_note", "animation"} else None
-        return sha, perceptual
+        perceptual = await ensure_probe_perceptual(probe, msg)
+        return probe.sha256, perceptual
     finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        close_media_probe(probe)
 
 
-async def store_message_hashes(msg: Message, bot: Bot, *, banned: bool = False) -> int:
+async def store_message_hashes(
+    msg: Message, bot: Bot, *, banned: bool = False, probe: MediaProbe | None = None
+) -> int:
     entries = media_file_entries(msg)
     if not entries:
         return 0
-    sha, perceptual = await _compute_all(bot, msg)
+    own_probe = probe is None
+    if probe is None:
+        probe = await open_media_probe(bot, msg)
+    sha = probe.sha256 if probe else None
+    perceptual = await ensure_probe_perceptual(probe, msg) if probe else None
     user_id = msg.from_user.id if msg.from_user else None
     _size, duration, width, height = _media_metadata(msg)
     count = 0
-    async with SessionLocal() as db:
-        for unique, file_id, media_type in entries:
-            await _upsert_hash(db, key=unique, file_id=file_id, media_type=media_type, user_id=user_id, banned=banned)
-            count += 1
-            if sha:
-                await _upsert_hash(db, key=sha, file_id=file_id, media_type=media_type, user_id=user_id, banned=banned)
+    try:
+        async with SessionLocal() as db:
+            for unique, file_id, media_type in entries:
+                await _upsert_hash(db, key=unique, file_id=file_id, media_type=media_type, user_id=user_id, banned=banned)
                 count += 1
-            if perceptual:
-                await _upsert_video_fingerprint(
-                    db, fingerprint=perceptual, file_id=file_id, user_id=user_id,
-                    duration=duration, width=width, height=height, banned=banned,
-                )
-                count += 1
-        await db.commit()
-    return count
+                if sha:
+                    await _upsert_hash(db, key=sha, file_id=file_id, media_type=media_type, user_id=user_id, banned=banned)
+                    count += 1
+                if perceptual:
+                    await _upsert_video_fingerprint(
+                        db, fingerprint=perceptual, file_id=file_id, user_id=user_id,
+                        duration=duration, width=width, height=height, banned=banned,
+                    )
+                    count += 1
+            await db.commit()
+        if banned:
+            invalidate_banned_cache()
+        return count
+    finally:
+        if own_probe:
+            close_media_probe(probe)
 
 
 async def ban_hash_from_message(msg: Message, bot: Bot | None = None) -> int:
@@ -506,33 +647,19 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
 
 
 async def find_banned_hash(bot: Bot, msg: Message) -> HashBanMatch:
-    entries = media_file_entries(msg)
-    if not entries:
+    match = await find_banned_id(msg)
+    if match.matched:
+        return match
+    probe = await open_media_probe(bot, msg)
+    if not probe:
         return HashBanMatch()
-    async with SessionLocal() as db:
-        for unique, _file_id, media_type in entries:
-            found = (await db.execute(select(MediaHash.id).where(MediaHash.file_unique_id == unique, MediaHash.banned.is_(True)).limit(1))).first()
-            if found:
-                return HashBanMatch(True, "file_unique_id", unique, media_type, 100.0)
-    sha, perceptual = await _compute_all(bot, msg)
-    if sha:
-        async with SessionLocal() as db:
-            found = (await db.execute(select(MediaHash.id).where(MediaHash.file_unique_id == sha, MediaHash.banned.is_(True)).limit(1))).first()
-            if found:
-                return HashBanMatch(True, "sha256", sha, entries[0][2], 100.0)
-    if perceptual:
-        _size, duration, width, height = _media_metadata(msg)
-        rows = list(await _db_scalars(select(VideoFingerprint).where(VideoFingerprint.banned.is_(True))))
-        best: tuple[float, VideoFingerprint] | None = None
-        for row in rows:
-            if not _compatible_metadata(duration, width, height, row.duration, row.width, row.height):
-                continue
-            matched, similarity = _compare_fingerprints(perceptual, row.fingerprint)
-            if matched and (best is None or similarity > best[0]):
-                best = (similarity, row)
-        if best:
-            return HashBanMatch(True, "perceptual_video", best[1].fingerprint, entries[0][2], best[0])
-    return HashBanMatch()
+    try:
+        match = await find_banned_sha(probe)
+        if match.matched:
+            return match
+        return await find_banned_perceptual(probe, msg)
+    finally:
+        close_media_probe(probe)
 
 
 async def record_repost_verification(*, match: HashBanMatch, deleted: bool, user_banned: bool, pipeline_stopped: bool, user_id: int | None, chat_id: int, message_id: int) -> None:

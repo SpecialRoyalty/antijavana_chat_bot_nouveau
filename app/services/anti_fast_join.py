@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import ChatMemberUpdated, Message
-from sqlalchemy import select, func
+from sqlalchemy import func, select, update
 
 from app.config import get_settings
 from app.db.models import RapidJoinGuard, TrackedMessage, User
@@ -12,6 +14,12 @@ from app.db.session import SessionLocal
 from app.services import settings as st
 from app.services.state import log_error
 from app.services.users import protected
+
+# Cache en mémoire des heures d'arrivée réellement observées.
+# Il est alimenté immédiatement lors de chat_member et évite un SELECT à chaque média.
+_JOIN_CACHE: dict[int, tuple[int, datetime]] = {}
+_JOIN_CACHE_NEXT_CLEANUP = datetime.min
+_DELETE_CONCURRENCY = 4
 
 
 async def enabled() -> bool:
@@ -28,7 +36,8 @@ async def window_minutes() -> int:
 
 
 async def register_join(event: ChatMemberUpdated) -> None:
-    """Enregistre/reinitialise l'heure d'arrivée réelle d'un membre du groupe principal."""
+    """Enregistre/réinitialise l'heure d'arrivée réelle d'un membre du groupe principal."""
+    global _JOIN_CACHE_NEXT_CLEANUP
     if event.chat.id != get_settings().main_group_id:
         return
     member = getattr(event.new_chat_member, 'user', None) or event.from_user
@@ -38,6 +47,14 @@ async def register_join(event: ChatMemberUpdated) -> None:
         return
 
     now = datetime.utcnow()
+    if now >= _JOIN_CACHE_NEXT_CLEANUP:
+        cutoff = now - timedelta(hours=2)
+        for uid, (_chat_id, joined_at) in list(_JOIN_CACHE.items()):
+            if joined_at < cutoff:
+                _JOIN_CACHE.pop(uid, None)
+        _JOIN_CACHE_NEXT_CLEANUP = now + timedelta(minutes=5)
+    _JOIN_CACHE[member.id] = (event.chat.id, now)
+
     async with SessionLocal() as db:
         row = await db.get(RapidJoinGuard, member.id)
         if not row:
@@ -55,77 +72,111 @@ async def register_join(event: ChatMemberUpdated) -> None:
         await db.commit()
 
 
+async def _joined_at(user_id: int) -> tuple[int, datetime] | None:
+    cached = _JOIN_CACHE.get(user_id)
+    if cached is not None:
+        return cached
+
+    async with SessionLocal() as db:
+        row = await db.get(RapidJoinGuard, user_id)
+        if not row:
+            return None
+        cached = (row.chat_id, row.joined_at)
+    _JOIN_CACHE[user_id] = cached
+    return cached
+
+
 async def remaining_seconds(user_id: int) -> int | None:
     if not await enabled():
         return None
-    async with SessionLocal() as db:
-        row = await db.get(RapidJoinGuard, user_id)
-        if not row or row.chat_id != get_settings().main_group_id:
-            return None
-        limit = timedelta(minutes=await window_minutes())
-        remaining = (row.joined_at + limit - datetime.utcnow()).total_seconds()
-        return max(0, int(remaining))
+    joined = await _joined_at(user_id)
+    if not joined or joined[0] != get_settings().main_group_id:
+        return None
+    limit = timedelta(minutes=await window_minutes())
+    remaining = (joined[1] + limit - datetime.utcnow()).total_seconds()
+    return max(0, int(remaining))
 
 
 async def should_ban_for_fast_media(msg: Message) -> bool:
     """True uniquement pour un média publié dans la fenêtre suivant une arrivée connue."""
     if not msg.from_user or msg.chat.id != get_settings().main_group_id:
         return False
-    if await protected(msg.from_user.id):
-        return False
-    if not await enabled():
+    if await protected(msg.from_user.id) or not await enabled():
         return False
 
     from app.services.hashban import media_file_entries
     if not media_file_entries(msg):
         return False
 
-    async with SessionLocal() as db:
-        row = await db.get(RapidJoinGuard, msg.from_user.id)
-        if not row or row.chat_id != msg.chat.id:
-            # Donnée absente = aucune sanction automatique.
-            return False
-        return datetime.utcnow() < row.joined_at + timedelta(minutes=await window_minutes())
+    joined = await _joined_at(msg.from_user.id)
+    if not joined or joined[0] != msg.chat.id:
+        # Donnée absente = aucune sanction automatique.
+        return False
+    return datetime.utcnow() < joined[1] + timedelta(minutes=await window_minutes())
+
+
+async def _delete_one(bot: Bot, chat_id: int, message_id: int, semaphore: asyncio.Semaphore) -> tuple[int, bool]:
+    async with semaphore:
+        try:
+            await bot.delete_message(chat_id, message_id)
+            return message_id, True
+        except TelegramBadRequest as exc:
+            low = str(exc).lower()
+            # Déjà absent = considéré comme nettoyé, inutile de le retenter plus tard.
+            if 'message to delete not found' in low or 'message identifier is not specified' in low:
+                return message_id, True
+            await log_error('anti_fast_join_delete', exc)
+            return message_id, False
+        except Exception as exc:
+            await log_error('anti_fast_join_delete', exc)
+            return message_id, False
 
 
 async def delete_all_tracked_user_content(bot: Bot, chat_id: int, user_id: int) -> tuple[int, int]:
-    """Supprime tous les messages suivis du membre. Retourne (supprimés, échecs)."""
-    deleted = 0
-    failed = 0
+    """Supprime les messages suivis sans garder une transaction DB ouverte pendant Telegram."""
     async with SessionLocal() as db:
-        res = await db.execute(
-            select(TrackedMessage).where(
+        rows = list((await db.execute(
+            select(TrackedMessage.id, TrackedMessage.message_id).where(
                 TrackedMessage.chat_id == chat_id,
                 TrackedMessage.user_id == user_id,
-                TrackedMessage.deleted == False,
+                TrackedMessage.deleted.is_(False),
             )
-        )
-        rows = list(res.scalars().all())
-        for tm in rows:
-            try:
-                await bot.delete_message(tm.chat_id, tm.message_id)
-                tm.deleted = True
-                deleted += 1
-            except Exception as exc:
-                failed += 1
-                await log_error('anti_fast_join_delete', exc)
-        await db.commit()
+        )).all())
+
+    if not rows:
+        return 0, 0
+
+    semaphore = asyncio.Semaphore(_DELETE_CONCURRENCY)
+    results = await asyncio.gather(*[
+        _delete_one(bot, chat_id, message_id, semaphore)
+        for _row_id, message_id in rows
+    ])
+    success_message_ids = [message_id for message_id, ok in results if ok]
+    deleted = len(success_message_ids)
+    failed = len(results) - deleted
+
+    if success_message_ids:
+        async with SessionLocal() as db:
+            await db.execute(
+                update(TrackedMessage)
+                .where(
+                    TrackedMessage.chat_id == chat_id,
+                    TrackedMessage.message_id.in_(success_message_ids),
+                )
+                .values(deleted=True)
+            )
+            await db.commit()
     return deleted, failed
 
 
 async def enforce(bot: Bot, msg: Message) -> bool:
-    """Bannit et nettoie si la règle publication immédiate s'applique.
-
-    Retourne True si une sanction a été exécutée et que le pipeline doit s'arrêter.
-    """
     if not await should_ban_for_fast_media(msg):
         return False
 
     uid = msg.from_user.id
     deleted, failed = await delete_all_tracked_user_content(bot, msg.chat.id, uid)
 
-    # Le message courant est déjà tracké dans moderate_message. Si la suppression
-    # globale a échoué ou n'a pas encore vu ce message, on tente explicitement.
+    # Le message courant est déjà tracké ; tentative défensive supplémentaire.
     try:
         await bot.delete_message(msg.chat.id, msg.message_id)
     except Exception:
@@ -144,9 +195,8 @@ async def enforce(bot: Bot, msg: Message) -> bool:
         if row:
             row.last_triggered_at = now
             row.trigger_count += 1
-        user = await db.get(User, uid)
-        if user and banned:
-            user.is_banned = True
+        if banned:
+            await db.execute(update(User).where(User.id == uid).values(is_banned=True))
         await db.commit()
 
     await st.set_value('anti_fast_join_last_user_id', str(uid))

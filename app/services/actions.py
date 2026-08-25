@@ -1,4 +1,6 @@
+import asyncio
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Message
 from sqlalchemy import select
 
@@ -45,11 +47,17 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
         parts = (msg.text or "").split()
         if len(parts) > 1 and parts[1].isdigit():
             count = min(int(parts[1]), 300)
-        for message_id in range(msg.message_id - 1, max(msg.message_id - count, 0), -1):
-            try:
-                await bot.delete_message(msg.chat.id, message_id)
-            except Exception:
-                pass
+        semaphore = asyncio.Semaphore(4)
+        async def remove(message_id: int):
+            async with semaphore:
+                try:
+                    await bot.delete_message(msg.chat.id, message_id)
+                except Exception:
+                    pass
+        await asyncio.gather(*(
+            remove(message_id)
+            for message_id in range(msg.message_id - 1, max(msg.message_id - count, 0), -1)
+        ))
         return True
 
     if cmd == "/info" and target and target.from_user:
@@ -67,12 +75,13 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
             return True
         entries = await audit_hashes(bot, target)
         report = format_hash_audit(entries, title="🔍 DEMANDE DE VÉRIFICATION HASH")
-        for admin_id in get_settings().admin_ids:
+        async def send_report_to_admin(admin_id: int):
             for chunk in split_telegram_text(report):
                 try:
                     await bot.send_message(admin_id, chunk)
                 except Exception as exc:
                     await log_error("hashdemande_send", exc)
+        await asyncio.gather(*(send_report_to_admin(admin_id) for admin_id in get_settings().admin_ids))
         return True
 
     if not target:
@@ -116,19 +125,33 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
             await ban(bot, msg.chat.id, uid)
 
             async with SessionLocal() as db:
-                result = await db.execute(
-                    select(TrackedMessage).where(
+                tracked_rows = list((await db.execute(
+                    select(TrackedMessage.id, TrackedMessage.chat_id, TrackedMessage.message_id).where(
                         TrackedMessage.chat_id == msg.chat.id,
                         TrackedMessage.user_id == uid,
                         TrackedMessage.deleted.is_(False),
                     )
-                )
-                for tracked in result.scalars().all():
+                )).all())
+
+            semaphore = asyncio.Semaphore(4)
+            async def remove_tracked(row):
+                row_id, chat_id, message_id = row
+                async with semaphore:
                     try:
-                        await bot.delete_message(tracked.chat_id, tracked.message_id)
-                        tracked.deleted = True
+                        await bot.delete_message(chat_id, message_id)
+                        return row_id
+                    except TelegramBadRequest as exc:
+                        low = str(exc).lower()
+                        if 'message to delete not found' in low or 'message identifier is not specified' in low:
+                            return row_id
+                        return None
                     except Exception:
-                        pass
-                await db.commit()
+                        return None
+            removed_ids = [rid for rid in await asyncio.gather(*(remove_tracked(row) for row in tracked_rows)) if rid is not None]
+            if removed_ids:
+                from sqlalchemy import update
+                async with SessionLocal() as db:
+                    await db.execute(update(TrackedMessage).where(TrackedMessage.id.in_(removed_ids)).values(deleted=True))
+                    await db.commit()
 
     return True

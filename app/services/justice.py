@@ -1,4 +1,4 @@
-from sqlalchemy import select, func, and_, or_
+from sqlalchemy import select, func, and_, or_, update
 from aiogram import Bot
 from app.config import get_settings
 from app.db.session import SessionLocal
@@ -140,25 +140,24 @@ async def execute_justice(bot:Bot, manual:bool=False):
         await track(s.main_group_id, m.message_id, None, 'justice', False)
     except Exception as e:
         await log_error('justice_message', e)
-    removed=0
-    async with SessionLocal() as db:
-        for u in cs:
-            if u.id == int(await st.get_value('bot_id','0') or '0'):
-                continue
-            try:
-                # Bot API n'a pas de méthode "kick visible" séparée : le retrait
-                # fiable se fait par ban puis unban. Certaines configurations Telegram
-                # n'affichent pas la notification système de retrait ; on publie donc
-                # une notification visible dédiée juste après le retrait.
-                await bot.ban_chat_member(s.main_group_id, u.id, revoke_messages=False)
-                await bot.unban_chat_member(s.main_group_id, u.id, only_if_banned=True)
-                await _send_visible_justice_removal(bot, u)
-                u2=await db.get(User,u.id)
-                if u2: u2.is_banned=True
-                removed+=1
-            except Exception as e:
-                await log_error('justice_remove',f'{u.id}: {e}')
-        await db.commit()
+    removed_ids=[]
+    bot_id=int(await st.get_value('bot_id','0') or '0')
+    for u in cs:
+        if u.id == bot_id:
+            continue
+        try:
+            # Pas de connexion PostgreSQL gardée pendant les appels Telegram.
+            await bot.ban_chat_member(s.main_group_id, u.id, revoke_messages=False)
+            await bot.unban_chat_member(s.main_group_id, u.id, only_if_banned=True)
+            await _send_visible_justice_removal(bot, u)
+            removed_ids.append(u.id)
+        except Exception as e:
+            await log_error('justice_remove',f'{u.id}: {e}')
+    removed=len(removed_ids)
+    if removed_ids:
+        async with SessionLocal() as db:
+            await db.execute(update(User).where(User.id.in_(removed_ids)).values(is_banned=True))
+            await db.commit()
     import asyncio
     await asyncio.sleep(300)
     try: await bot.set_chat_permissions(s.main_group_id, permissions=OPEN_PERMS)

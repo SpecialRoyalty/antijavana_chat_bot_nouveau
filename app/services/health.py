@@ -15,11 +15,18 @@ async def health_text(bot:Bot):
     s=get_settings(); slot=await st.time_slot(); start,end=slot_times(slot,s.timezone)
     groups=[('Principal',s.main_group_id),('Pass soirée',s.pass_soiree_group_id),('Pass total',s.pass_total_group_id),('VIP JAVANA',s.vip_javana_group_id),('Logs',s.log_group_id)]
     group_lines=[]; missing=[]
+    try:
+        me=await bot.get_me()
+        bot_id=me.id
+    except Exception:
+        bot_id=None
     for name,gid in groups:
         if not gid:
             group_lines.append(f'{name}: non configuré'); missing.append(name); continue
+        if bot_id is None:
+            group_lines.append(f'{name}: ERREUR'); continue
         try:
-            me=await bot.get_me(); member=await bot.get_chat_member(gid,me.id)
+            member=await bot.get_chat_member(gid,bot_id)
             group_lines.append(f'{name}: OK ({member.status})')
         except Exception:
             group_lines.append(f'{name}: ERREUR')

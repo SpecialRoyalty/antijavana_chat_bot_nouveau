@@ -9,7 +9,7 @@ from app.db.session import SessionLocal
 from app.db.models import User, InviteLink
 from app.services.users import upsert_user, protected
 from app.config import get_settings
-from app.services.moderation import words
+from app.services.moderation import matched_word_rule
 from app.services.state import log_error, track
 from app.services import settings as st
 
@@ -37,12 +37,9 @@ def _contains_name_rule(rule: str, tokens: list[str]) -> bool:
 
 
 async def matches_nameban(username: str | None, full_name: str | None) -> tuple[bool, str | None]:
-    """Retourne la règle nameban trouvée, sans recherche par sous-chaîne."""
-    tokens = _name_tokens(f"{username or ''} {full_name or ''}")
-    for rule in await words("nameban"):
-        if _contains_name_rule(rule, tokens):
-            return True, rule
-    return False, None
+    """Retourne la règle nameban trouvée, avec le même cache que la modération."""
+    rule = await matched_word_rule("nameban", f"{username or ''} {full_name or ''}")
+    return rule is not None, rule
 
 DEFAULT_TIERS=[
     {"count":1,"label":"1 vidéo","link":""},

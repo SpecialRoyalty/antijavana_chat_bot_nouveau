@@ -1,6 +1,8 @@
+import asyncio
 from datetime import datetime, timedelta
 from sqlalchemy import select, func, update
 from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from app.config import get_settings
 from app.db.session import SessionLocal
@@ -51,31 +53,51 @@ async def close_active_session():
 
 async def cleanup_session(bot:Bot, all_known:bool=False):
     s=get_settings(); sid=int(await st.get_value('active_session_id','0') or '0')
-    deleted=0; failed=0; media_failed=0
     async with SessionLocal() as db:
-        q=select(TrackedMessage).where(TrackedMessage.chat_id==s.main_group_id,TrackedMessage.deleted==False,TrackedMessage.kind!='status')
+        q=select(TrackedMessage.id,TrackedMessage.chat_id,TrackedMessage.message_id,TrackedMessage.is_media).where(TrackedMessage.chat_id==s.main_group_id,TrackedMessage.deleted.is_(False),TrackedMessage.kind!='status')
         if sid and not all_known: q=q.where(TrackedMessage.session_id==sid)
-        res=await db.execute(q)
-        items=list(res.scalars().all())
-        for tm in items:
+        items=list((await db.execute(q)).all())
+
+    semaphore=asyncio.Semaphore(4)
+    async def remove(item):
+        _row_id,chat_id,message_id,is_media=item
+        async with semaphore:
             try:
-                await bot.delete_message(tm.chat_id,tm.message_id); tm.deleted=True; deleted+=1
+                await bot.delete_message(chat_id,message_id)
+                return message_id,True,bool(is_media)
+            except TelegramBadRequest as e:
+                low=str(e).lower()
+                if 'message to delete not found' in low or 'message identifier is not specified' in low:
+                    return message_id,True,bool(is_media)
+                await log_error('cleanup_delete',f'{chat_id}/{message_id}: {e}')
+                return message_id,False,bool(is_media)
             except Exception as e:
-                failed+=1
-                if tm.is_media: media_failed+=1
-                await log_error('cleanup_delete',f'{tm.chat_id}/{tm.message_id}: {e}')
-        if sid:
-            sess=await db.get(SessionLog,sid)
-            if sess: sess.messages_deleted+=deleted
+                await log_error('cleanup_delete',f'{chat_id}/{message_id}: {e}')
+                return message_id,False,bool(is_media)
+
+    results=await asyncio.gather(*(remove(item) for item in items)) if items else []
+    successful=[mid for mid,ok,_media in results if ok]
+    deleted=len(successful); failed=len(results)-deleted
+    media_failed=sum(1 for _mid,ok,is_media in results if not ok and is_media)
+
+    async with SessionLocal() as db:
+        if successful:
+            await db.execute(update(TrackedMessage).where(TrackedMessage.chat_id==s.main_group_id,TrackedMessage.message_id.in_(successful)).values(deleted=True))
+        if sid and deleted:
+            await db.execute(update(SessionLog).where(SessionLog.id==sid).values(messages_deleted=SessionLog.messages_deleted+deleted))
         await db.commit()
+
     if failed:
         await notify_admins(bot,f'🚨 ERREUR NETTOYAGE\n\nMessages non supprimés : {failed}\nMédias non supprimés : {media_failed}\n\nVérifie que le bot est admin avec droit “Supprimer les messages”, puis relance 🧹 Nettoyage.')
     return deleted, failed
 
 async def notify_admins(bot:Bot,text:str, reply_markup=None):
-    for aid in get_settings().admin_ids:
-        try: await bot.send_message(aid,text,reply_markup=reply_markup)
-        except Exception: pass
+    async def send_one(aid:int):
+        try:
+            await bot.send_message(aid,text,reply_markup=reply_markup)
+        except Exception:
+            pass
+    await asyncio.gather(*(send_one(aid) for aid in get_settings().admin_ids))
 
 async def send_report(bot:Bot, kind='auto', sid:int|None=None):
     async with SessionLocal() as db:

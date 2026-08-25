@@ -6,7 +6,7 @@ from datetime import datetime
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import Message, User as TelegramUser
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.config import get_settings
 from app.db.models import PrivateSubscriber
@@ -80,24 +80,17 @@ async def broadcast_to_private_starters(bot: Bot, source: Message) -> dict[str, 
     blocked = 0
     errors = 0
     now = datetime.utcnow()
+    sent_ids: list[int] = []
+    blocked_ids: list[int] = []
 
     for subscriber in subscribers:
         try:
             await _copy_with_retry(bot, subscriber.user_id, source)
             sent += 1
-            async with SessionLocal() as db:
-                current = await db.get(PrivateSubscriber, subscriber.user_id)
-                if current:
-                    current.last_broadcast_at = now
-                    current.active = True
-                    await db.commit()
+            sent_ids.append(subscriber.user_id)
         except TelegramForbiddenError:
             blocked += 1
-            async with SessionLocal() as db:
-                current = await db.get(PrivateSubscriber, subscriber.user_id)
-                if current:
-                    current.active = False
-                    await db.commit()
+            blocked_ids.append(subscriber.user_id)
         except TelegramBadRequest as exc:
             # Chat introuvable, compte supprimé, ou autre destinataire devenu invalide.
             errors += 1
@@ -109,6 +102,22 @@ async def broadcast_to_private_starters(bot: Bot, source: Message) -> dict[str, 
         # Limite volontaire sous la limite Telegram pour réduire les FloodWait.
         await asyncio.sleep(0.045)
 
+    # Une seule transaction DB à la fin au lieu d'un SELECT+COMMIT par destinataire.
+    async with SessionLocal() as db:
+        if sent_ids:
+            await db.execute(
+                update(PrivateSubscriber)
+                .where(PrivateSubscriber.user_id.in_(sent_ids))
+                .values(last_broadcast_at=now, active=True)
+            )
+        if blocked_ids:
+            await db.execute(
+                update(PrivateSubscriber)
+                .where(PrivateSubscriber.user_id.in_(blocked_ids))
+                .values(active=False)
+            )
+        await db.commit()
+
     return {
         'total': len(subscribers),
         'sent': sent,
@@ -119,7 +128,6 @@ async def broadcast_to_private_starters(bot: Bot, source: Message) -> dict[str, 
 
 async def private_subscriber_count() -> int:
     async with SessionLocal() as db:
-        result = await db.execute(
-            select(PrivateSubscriber.user_id).where(PrivateSubscriber.active.is_(True))
-        )
-        return len(result.scalars().all())
+        return int((await db.execute(
+            select(func.count(PrivateSubscriber.user_id)).where(PrivateSubscriber.active.is_(True))
+        )).scalar() or 0)
