@@ -76,7 +76,11 @@ class TrackedMessage(Base):
     is_media: Mapped[bool]=mapped_column(Boolean, default=False)
     deleted: Mapped[bool]=mapped_column(Boolean, default=False)
     created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
-    __table_args__=(UniqueConstraint('chat_id','message_id', name='uq_tracked_message'),)
+    __table_args__=(
+        UniqueConstraint('chat_id','message_id', name='uq_tracked_message'),
+        Index('ix_tracked_chat_user_deleted','chat_id','user_id','deleted'),
+        Index('ix_tracked_chat_session_deleted','chat_id','session_id','deleted'),
+    )
 
 class MediaHash(Base):
     __tablename__='media_hashes'
@@ -209,4 +213,7 @@ class VideoFingerprint(Base):
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     banned: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    __table_args__ = (Index('ix_video_fingerprint_banned_duration', 'banned', 'duration'),)
+    __table_args__ = (
+        Index('ix_video_fingerprint_banned_duration', 'banned', 'duration'),
+        Index('ix_video_fingerprints_fingerprint', 'fingerprint'),
+    )
