@@ -217,3 +217,68 @@ class VideoFingerprint(Base):
         Index('ix_video_fingerprint_banned_duration', 'banned', 'duration'),
         Index('ix_video_fingerprints_fingerprint', 'fingerprint'),
     )
+
+class ManagedChat(Base):
+    __tablename__ = 'managed_chats'
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    title: Mapped[str] = mapped_column(String(512), default='')
+    role: Mapped[str] = mapped_column(String(40), default='pending', index=True)  # pending, group_a, group_b, vip_soiree, vip_total, vip_javana, logs, refused
+    status: Mapped[str] = mapped_column(String(30), default='pending', index=True)  # pending, active, degraded, unavailable, disabled
+    validated_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    __table_args__ = (Index('ix_managed_chats_role_status', 'role', 'status'),)
+
+
+class GlobalSanction(Base):
+    __tablename__ = 'global_sanctions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)  # ban, mute
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    source_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source: Mapped[str] = mapped_column(String(40), default='manual')
+    reason: Mapped[str] = mapped_column(Text, default='')
+    created_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    __table_args__ = (
+        Index('ix_global_sanction_user_kind_active', 'user_id', 'kind', 'active'),
+    )
+
+
+class InviteOwner(Base):
+    __tablename__ = 'invite_owners'
+    owner_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    group_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
+    invite_link: Mapped[str | None] = mapped_column(Text, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    released: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    score: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class InviteCredit(Base):
+    __tablename__ = 'invite_credits'
+    invited_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    group_chat_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    invite_link: Mapped[str] = mapped_column(Text, default='')
+    status: Mapped[str] = mapped_column(String(20), default='pending', index=True)  # pending, valid, rejected
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reject_reason: Mapped[str] = mapped_column(String(120), default='')
+
+
+class InviteCompetition(Base):
+    __tablename__ = 'invite_competitions'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    note: Mapped[str] = mapped_column(String(255), default='')
