@@ -6,6 +6,8 @@ def vote_kb():
 def admin_kb():
     rows=[
         [('📊 Tableau de bord','adm_dashboard'),('🟢 Santé','adm_health')],
+        [('🌙 Groupe ce soir','adm_active_group'),('🧩 Groupes / VIP','adm_groups')],
+        [('🧪 Test infra','adm_infra')],
         [('🔓 Ouvrir','adm_open'),('🔒 Fermer','adm_close')],
         [('⏰ Auto ON/OFF','adm_auto'),('📦 Objectif','adm_goal')],
         [('⚖️ Justice','adm_justice'),('🧹 Nettoyage','adm_cleanup')],
@@ -128,6 +130,7 @@ def top_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📤 Publier classement maintenant', callback_data='top_send')],
         [InlineKeyboardButton(text='🩺 Vérifier top inviteurs', callback_data='top_health')],
+        [InlineKeyboardButton(text='🗃 Archiver + remettre à zéro', callback_data='invite_reset_confirm')],
         [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
     ])
 
@@ -141,6 +144,7 @@ def invite_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='📤 Publier maintenant', callback_data='invite_send'), InlineKeyboardButton(text='🩺 Vérifier invitations', callback_data='invite_health')],
         [InlineKeyboardButton(text='📝 Modifier texte', callback_data='await:invite_text'), InlineKeyboardButton(text='🖼 Modifier image', callback_data='await:invite_image')],
-        [InlineKeyboardButton(text='🎁 Voir paliers', callback_data='invite_tiers'), InlineKeyboardButton(text='✏️ Modifier paliers', callback_data='await:invite_tiers')],
+        [InlineKeyboardButton(text='🏆 Voir TOP 10', callback_data='top_health')],
+        [InlineKeyboardButton(text='🗃 Archiver + remettre à zéro', callback_data='invite_reset_confirm')],
         [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
     ])
