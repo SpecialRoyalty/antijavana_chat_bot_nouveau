@@ -13,17 +13,26 @@ from app.services.crowdfunding import send_crowd_ad
 from app.services.ads import send_random_ad
 from app.services.invites import validate_invites, top_text, send_invite_ad
 from app.services.freepass import send_due_free_pass_links
-from app.services.multigroup import active_group_id, health_monitor_tick, selected_group_role
+from app.services.multigroup import active_group_id, health_monitor_tick, selected_group_role, main_group_ids
 from app.services.justice import justice_already_done, process_pending_justice_removals
-from app.utils.time import in_slot, mid_time, now_tz
+from app.utils.time import in_slot, mid_time, now_tz, slot_times
 
 
 async def tick(bot:Bot):
     chat=await active_group_id()
-    if not chat:
+    auto_=await st.auto_enabled()
+    open_=await st.is_open()
+    if not chat or (not auto_ and not open_):
+        # Aucune ouverture / maintenance : A et B restent fermés mais gardent
+        # un message public avec le bouton « Partager le groupe ».
+        for gid in await main_group_ids(include_unavailable=False):
+            try:
+                await ensure_status_message(bot,gid,recreate_on_change=True)
+            except Exception:
+                pass
         return
     await ensure_status_message(bot,chat,recreate_on_change=True)
-    if not await st.auto_enabled():
+    if not auto_:
         return
     s=get_settings()
     ins=in_slot(await st.time_slot(),s.timezone)
@@ -53,36 +62,40 @@ async def justice_tick(bot:Bot):
         await run_justice_now(bot)
 
 
-async def rules_tick(bot:Bot, force:bool=False):
+async def rules_tick(bot:Bot, force:bool=False, target:str='active'):
     if not force and not await st.is_open():
-        return
-    chat=await active_group_id()
-    if not chat:
-        return
-    old_chat=int(await st.get_value('rules_chat_id','0') or '0')
-    old=await st.get_value('rules_message_id','')
-    try:
-        if old and old_chat:
-            await bot.delete_message(old_chat,int(old))
-    except Exception:
-        pass
-    m=await bot.send_message(chat, await st.get_value('rules_text','Règles'))
-    await st.set_value('rules_message_id',str(m.message_id))
-    await st.set_value('rules_chat_id',str(chat))
-    await st.set_value('last_rules_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    return m.message_id
+        return []
+    from app.services.multigroup import resolve_main_targets
+    targets=await resolve_main_targets(target, include_unavailable=False)
+    if not targets:
+        return []
+    text=await st.get_value('rules_text','Règles')
+    sent=[]
+    for chat in targets:
+        old_key=f'rules_message_id:{chat}'
+        old=await st.get_value(old_key,'')
+        try:
+            if old:
+                await bot.delete_message(chat,int(old))
+        except Exception:
+            pass
+        try:
+            m=await bot.send_message(chat,text)
+            await st.set_value(old_key,str(m.message_id))
+            sent.append((chat,m.message_id))
+        except Exception:
+            continue
+    if sent:
+        await st.set_value('last_rules_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+        await st.set_value('rules_message_id',str(sent[-1][1]))
+        await st.set_value('rules_chat_id',str(sent[-1][0]))
+        await st.set_value('last_rules_chat_ids', ','.join(str(x[0]) for x in sent))
+    return sent
 
 
-async def top_after_justice_tick(bot:Bot, force:bool=False):
-    if not force and (not await st.is_open() or not await active_group_id()):
-        return None
-    if not force:
-        if not await justice_already_done():
-            return None
-        if await st.get_value('justice_running','false') == 'true':
-            return None
+async def _publish_invite_top(bot: Bot, marker_key: str):
     sid=await st.get_value('active_session_id','0')
-    if not force and sid != '0' and await st.get_value('invite_top_last_session','') == sid:
+    if sid != '0' and await st.get_value(marker_key,'') == sid:
         return None
     txt=await top_text()
     if 'Aucune statistique' in txt:
@@ -93,8 +106,42 @@ async def top_after_justice_tick(bot:Bot, force:bool=False):
     m=await bot.send_message(chat,txt)
     await st.set_value('last_top_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     if sid != '0':
-        await st.set_value('invite_top_last_session',sid)
+        await st.set_value(marker_key,sid)
     return m.message_id
+
+
+async def top_after_justice_tick(bot:Bot, force:bool=False):
+    """Premier TOP 10 : juste après la justice populaire."""
+    if not force and (not await st.is_open() or not await active_group_id()):
+        return None
+    if not force:
+        if not await justice_already_done():
+            return None
+        if await st.get_value('justice_running','false') == 'true':
+            return None
+    return await _publish_invite_top(bot, 'invite_top1_last_session')
+
+
+async def top_late_session_tick(bot: Bot, force: bool=False):
+    """Deuxième TOP 10 : à environ 75 % de la fenêtre d'ouverture.
+
+    Le marqueur par session empêche un doublon après redémarrage du scheduler.
+    """
+    if not force and (not await st.is_open() or not await active_group_id()):
+        return None
+    if not force:
+        slot=await st.time_slot()
+        tz=get_settings().timezone
+        start,end=slot_times(slot,tz)
+        n=now_tz(tz)
+        # slot_times peut retourner la prochaine fenêtre lorsqu'on est après minuit ;
+        # on ramène à la fenêtre courante si nécessaire.
+        if n < start and (start-n) > timedelta(hours=12):
+            start-=timedelta(days=1); end-=timedelta(days=1)
+        threshold=start+(end-start)*0.75
+        if n < threshold:
+            return None
+    return await _publish_invite_top(bot, 'invite_top2_last_session')
 
 
 async def infrastructure_tick(bot: Bot):
@@ -113,6 +160,7 @@ def start_scheduler(bot:Bot):
     sch.add_job(justice_tick,'interval',minutes=1,args=[bot],id='justice',next_run_time=now+timedelta(seconds=20))
     sch.add_job(validate_invites,'interval',minutes=1,args=[bot],id='invite_validate',next_run_time=now+timedelta(seconds=35))
     sch.add_job(top_after_justice_tick,'interval',minutes=1,args=[bot],id='top_after_justice',next_run_time=now+timedelta(seconds=50))
+    sch.add_job(top_late_session_tick,'interval',minutes=1,args=[bot],id='top_late_session',next_run_time=now+timedelta(seconds=57))
     sch.add_job(infrastructure_tick,'interval',minutes=2,args=[bot],id='infra_health',next_run_time=now+timedelta(seconds=65))
     sch.add_job(security_close_if_manual,'interval',minutes=5,args=[bot],id='security_close',next_run_time=now+timedelta(seconds=80))
 
