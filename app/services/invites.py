@@ -33,35 +33,44 @@ async def invite_text():
     )
 
 
-async def invite_kb(chat_id: int):
+async def invite_kb(chat_id: int, button_text: str = '🎁 Obtenir mon lien'):
     username = get_settings().public_bot_username.strip().lstrip('@')
     if username:
         return InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text='🎁 Obtenir mon lien', url=f'https://t.me/{username}?start=invite_{chat_id}')
+            InlineKeyboardButton(text=button_text, url=f'https://t.me/{username}?start=invite_{chat_id}')
         ]])
     return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text='🎁 Obtenir mon lien', callback_data=f'invite_private:{chat_id}')
+        InlineKeyboardButton(text=button_text, callback_data=f'invite_private:{chat_id}')
     ]])
 
 
-async def send_invite_ad(bot: Bot, force: bool = False):
+async def send_invite_ad(bot: Bot, force: bool = False, target: str = 'active'):
     if not force and not await st.is_open():
-        return None
-    chat_id = await active_group_id()
-    if not chat_id:
-        return None
+        return []
+    from app.services.multigroup import resolve_main_targets
+    targets=await resolve_main_targets(target, include_unavailable=False)
+    if not targets:
+        return []
     text = await invite_text()
     img = await st.get_value('invite_image_file_id', '')
-    kb = await invite_kb(chat_id)
-    if img:
-        m = await bot.send_photo(chat_id, img, caption=text, reply_markup=kb)
-        await track(chat_id, m.message_id, None, 'invite_ad', True)
-    else:
-        m = await bot.send_message(chat_id, text, reply_markup=kb)
-        await track(chat_id, m.message_id, None, 'invite_ad', False)
-    await st.set_value('last_invite_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    await st.set_value('last_invite_message_id', str(m.message_id))
-    return m.message_id
+    sent=[]
+    for chat_id in targets:
+        kb = await invite_kb(chat_id)
+        try:
+            if img:
+                m = await bot.send_photo(chat_id, img, caption=text, reply_markup=kb)
+                await track(chat_id, m.message_id, None, 'invite_ad', True)
+            else:
+                m = await bot.send_message(chat_id, text, reply_markup=kb)
+                await track(chat_id, m.message_id, None, 'invite_ad', False)
+            sent.append((chat_id,m.message_id))
+        except Exception as e:
+            await log_error(f'invite_ad:{chat_id}',e)
+    if sent:
+        await st.set_value('last_invite_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+        await st.set_value('last_invite_message_id', str(sent[-1][1]))
+        await st.set_value('last_invite_chat_ids', ','.join(str(x[0]) for x in sent))
+    return sent
 
 
 async def _owner(owner_id: int) -> InviteOwner | None:

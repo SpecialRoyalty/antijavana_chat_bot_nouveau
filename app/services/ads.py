@@ -42,7 +42,7 @@ async def ad_detail(ad_id:int):
     text=(ad.text or '[sans texte]')
     msg=f'📢 Pub #{ad.id}\n\nStatut : {"active" if ad.active else "off"}\nImage : {"oui" if ad.image_file_id else "non"}\n\nTexte :\n{text}'
     kb=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='📤 Publier maintenant', callback_data=f'ad_send_one:{ad.id}')],
+        [InlineKeyboardButton(text='📤 Publier maintenant', callback_data=f'ad_send_one_menu:{ad.id}')],
         [InlineKeyboardButton(text='📝 Modifier texte', callback_data=f'await:ad_edit_text:{ad.id}'), InlineKeyboardButton(text='🖼 Modifier image', callback_data=f'await:ad_edit_image:{ad.id}')],
         [InlineKeyboardButton(text='🟢/🔴 Activer/Désactiver', callback_data=f'ad_toggle:{ad.id}')],
         [InlineKeyboardButton(text='🗑 Supprimer cette pub', callback_data=f'ad_delete:{ad.id}')],
@@ -80,50 +80,50 @@ async def set_ad_image(ad_id:int, image_file_id:str):
         ad.image_file_id=image_file_id
         await db.commit(); return True
 
-async def send_ad_by_id(bot:Bot, ad_id:int, force:bool=True):
-    if not force and not await st.is_open(): return None
-    async with SessionLocal() as db:
-        ad=await db.get(Advertisement, ad_id)
-    if not ad: return None
-    from app.services.multigroup import active_group_id
-    chat_id=await active_group_id()
-    if not chat_id: return None
+async def _publish_ad(bot:Bot, ad, target:str='active'):
+    from app.services.multigroup import resolve_main_targets
+    targets=await resolve_main_targets(target, include_unavailable=False)
+    if not targets:
+        return []
     kb=None
     if ad.button_text and ad.button_url:
         kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=ad.button_text,url=ad.button_url)]])
-    if ad.image_file_id:
-        m=await bot.send_photo(chat_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
-    else:
-        m=await bot.send_message(chat_id,ad.text or '📢 Publicité',reply_markup=kb)
-    await track(chat_id,m.message_id,None,'ad',bool(ad.image_file_id))
-    from datetime import datetime
-    await st.set_value('last_ad_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    await st.set_value('last_ad_message_id', str(m.message_id))
-    await st.set_value('last_ad_id', str(ad.id))
-    return m.message_id
+    sent=[]
+    for chat_id in targets:
+        try:
+            if ad.image_file_id:
+                m=await bot.send_photo(chat_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
+            else:
+                m=await bot.send_message(chat_id,ad.text or '📢 Publicité',reply_markup=kb)
+            await track(chat_id,m.message_id,None,'ad',bool(ad.image_file_id))
+            sent.append((chat_id,m.message_id))
+        except Exception:
+            continue
+    if sent:
+        from datetime import datetime
+        await st.set_value('last_ad_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+        await st.set_value('last_ad_message_id', str(sent[-1][1]))
+        await st.set_value('last_ad_id', str(ad.id))
+        await st.set_value('last_ad_chat_ids', ','.join(str(x[0]) for x in sent))
+    return sent
 
-async def send_random_ad(bot:Bot, force:bool=False):
-    if not force and not await st.is_open(): return None
+
+async def send_ad_by_id(bot:Bot, ad_id:int, force:bool=True, target:str='active'):
+    if not force and not await st.is_open(): return []
+    async with SessionLocal() as db:
+        ad=await db.get(Advertisement, ad_id)
+    if not ad: return []
+    return await _publish_ad(bot,ad,target)
+
+
+async def send_random_ad(bot:Bot, force:bool=False, target:str='active'):
+    if not force and not await st.is_open(): return []
     async with SessionLocal() as db:
         res=await db.execute(select(Advertisement).where(Advertisement.active==True))
         ads=list(res.scalars().all())
-    if not ads: return None
-    ad=random.choice(ads)
-    from app.services.multigroup import active_group_id
-    chat_id=await active_group_id()
-    if not chat_id: return None
-    kb=None
-    if ad.button_text and ad.button_url:
-        kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=ad.button_text,url=ad.button_url)]])
-    if ad.image_file_id:
-        m=await bot.send_photo(chat_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
-    else:
-        m=await bot.send_message(chat_id,ad.text or '📢 Publicité',reply_markup=kb)
-    await track(chat_id,m.message_id,None,'ad',bool(ad.image_file_id))
-    from datetime import datetime
-    await st.set_value('last_ad_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    await st.set_value('last_ad_message_id', str(m.message_id))
-    return m.message_id
+    if not ads: return []
+    return await _publish_ad(bot, random.choice(ads), target)
+
 
 async def ads_health_text():
     last=await st.get_value('last_ad_sent_at','jamais')

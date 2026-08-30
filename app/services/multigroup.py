@@ -277,6 +277,33 @@ async def main_group_ids(include_unavailable: bool = True) -> list[int]:
         return [int(x) for x in (await db.execute(q)).scalars().all()]
 
 
+async def resolve_main_targets(target: str = 'active', include_unavailable: bool = False) -> list[int]:
+    """Résout une cible de publication manuelle/automatique.
+
+    target:
+      - active : groupe principal sélectionné/actif
+      - group_a / a : Groupe A
+      - group_b / b : Groupe B
+      - both / all : les deux groupes principaux validés
+
+    Pour les publications manuelles, on peut cibler un groupe fermé : la fermeture
+    bloque les membres, pas le bot. Un chat marqué unavailable reste exclu par défaut.
+    """
+    raw=(target or 'active').lower().strip()
+    if raw == 'active':
+        gid=await active_group_id()
+        return [gid] if gid else []
+    if raw in ('group_a','a'):
+        gid=await chat_id_for_role(ROLE_GROUP_A, include_unavailable=include_unavailable)
+        return [gid] if gid else []
+    if raw in ('group_b','b'):
+        gid=await chat_id_for_role(ROLE_GROUP_B, include_unavailable=include_unavailable)
+        return [gid] if gid else []
+    if raw in ('both','all','a+b'):
+        return await main_group_ids(include_unavailable=include_unavailable)
+    return []
+
+
 async def vip_group_ids(include_unavailable: bool = True) -> list[int]:
     async with SessionLocal() as db:
         q = select(ManagedChat.chat_id).where(ManagedChat.role.in_(VIP_ROLES))
@@ -367,6 +394,12 @@ async def select_active_group(bot: Bot, role: str) -> tuple[bool, str]:
             from app.services.session_ops import set_group_open
             await set_group_open(bot, False, 'no_session')
         await sync_redirections(bot)
+        try:
+            from app.services.state import ensure_status_message
+            for gid in groups:
+                await ensure_status_message(bot,gid,recreate_on_change=True)
+        except Exception:
+            pass
         return True, '🌑 Aucune ouverture sélectionnée. Les deux groupes restent fermés.'
 
     target = await chat_id_for_role(role, include_unavailable=False)
@@ -406,20 +439,23 @@ async def _redirect_link(bot: Bot, target_chat_id: int) -> str | None:
 async def sync_redirections(bot: Bot) -> None:
     """Ferme le groupe inactif et y maintient un message de redirection vers le groupe actif."""
     active = await active_group_id()
+    # En maintenance (Auto OFF, session fermée), aucun groupe ne redirige vers
+    # l'autre : les deux restent fermés et peuvent afficher leurs annonces.
+    redirect_active = active if (await st.is_open() or await st.auto_enabled()) else None
     groups = await main_group_ids()
-    link = await _redirect_link(bot, active) if active else None
+    link = await _redirect_link(bot, redirect_active) if redirect_active else None
 
     for gid in groups:
         key = f'redirect_message_id:{gid}'
         old = await st.get_value(key, '')
-        if gid == active or not active:
+        if gid == redirect_active or not redirect_active:
             if old:
                 try:
                     await bot.delete_message(gid, int(old))
                 except Exception:
                     pass
                 await st.set_value(key, '')
-            if not active:
+            if not redirect_active:
                 await _set_permissions_safely(bot, gid, False)
             continue
 

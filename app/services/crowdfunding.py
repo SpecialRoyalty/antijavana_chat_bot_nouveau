@@ -82,7 +82,7 @@ async def campaign_detail(cid:int):
     kb=InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='✅ Définir principale', callback_data=f'crowd_active:{c.id}'), InlineKeyboardButton(text='🟢/🔴 ON/OFF', callback_data=f'crowd_toggle:{c.id}')],
         [InlineKeyboardButton(text='📝 Modifier texte', callback_data=f'await:crowd_text:{c.id}'), InlineKeyboardButton(text='🎯 Modifier objectif', callback_data=f'await:crowd_target:{c.id}')],
-        [InlineKeyboardButton(text='🖼 Modifier image', callback_data=f'await:crowd_image:{c.id}'), InlineKeyboardButton(text='📤 Publier cette campagne', callback_data=f'crowd_send_one:{c.id}')],
+        [InlineKeyboardButton(text='🖼 Modifier image', callback_data=f'await:crowd_image:{c.id}'), InlineKeyboardButton(text='📤 Publier cette campagne', callback_data=f'crowd_send_one_menu:{c.id}')],
         [InlineKeyboardButton(text='🗑 Supprimer', callback_data=f'crowd_delete:{c.id}')],
         [InlineKeyboardButton(text='📋 Retour campagnes', callback_data='crowd_list')]
     ])
@@ -99,49 +99,48 @@ async def campaigns_kb():
     kb.append([InlineKeyboardButton(text='⬅️ Retour crowdfunding',callback_data='adm_crowd')])
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
-async def send_crowd_ad(bot:Bot, force:bool=False):
-    if not force and not await st.is_open(): return None
-    c=await random_active_campaign()
-    from app.services.multigroup import active_group_id
-    chat_id=await active_group_id()
-    if not chat_id: return None
+async def _publish_campaign(bot:Bot, c, target:str='active'):
+    from app.services.multigroup import resolve_main_targets
+    targets=await resolve_main_targets(target, include_unavailable=False)
+    if not targets:
+        return []
     text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
     kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
-    
-    if c.image_file_id:
-        m=await bot.send_photo(chat_id,c.image_file_id,caption=text,reply_markup=kb)
-        await track(chat_id,m.message_id,None,'crowdfunding',True)
-    else:
-        m=await bot.send_message(chat_id,text,reply_markup=kb)
-        await track(chat_id,m.message_id,None,'crowdfunding',False)
-    from datetime import datetime
-    await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    await st.set_value('last_crowd_message_id', str(m.message_id))
-    await st.set_value('last_crowd_campaign_id', str(c.id))
-    await st.set_value('last_crowd_chat_id', str(chat_id))
-    return m.message_id
+    sent=[]
+    for chat_id in targets:
+        try:
+            if c.image_file_id:
+                m=await bot.send_photo(chat_id,c.image_file_id,caption=text,reply_markup=kb)
+                await track(chat_id,m.message_id,None,'crowdfunding',True)
+            else:
+                m=await bot.send_message(chat_id,text,reply_markup=kb)
+                await track(chat_id,m.message_id,None,'crowdfunding',False)
+            sent.append((chat_id,m.message_id))
+        except Exception:
+            continue
+    if sent:
+        from datetime import datetime
+        await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+        await st.set_value('last_crowd_message_id', str(sent[-1][1]))
+        await st.set_value('last_crowd_campaign_id', str(c.id))
+        await st.set_value('last_crowd_chat_id', str(sent[-1][0]))
+        await st.set_value('last_crowd_chat_ids', ','.join(str(x[0]) for x in sent))
+    return sent
 
-async def send_campaign_by_id(bot:Bot, cid:int, force:bool=True):
-    if not force and not await st.is_open(): return None
+
+async def send_crowd_ad(bot:Bot, force:bool=False, target:str='active'):
+    if not force and not await st.is_open(): return []
+    c=await random_active_campaign()
+    return await _publish_campaign(bot,c,target)
+
+
+async def send_campaign_by_id(bot:Bot, cid:int, force:bool=True, target:str='active'):
+    if not force and not await st.is_open(): return []
     async with SessionLocal() as db:
         c=await db.get(Crowdfunding,cid)
-    if not c: return None
-    from app.services.multigroup import active_group_id
-    chat_id=await active_group_id()
-    if not chat_id: return None
-    text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
-    kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
-    if c.image_file_id:
-        m=await bot.send_photo(chat_id,c.image_file_id,caption=text,reply_markup=kb)
-        await track(chat_id,m.message_id,None,'crowdfunding',True)
-    else:
-        m=await bot.send_message(chat_id,text,reply_markup=kb)
-        await track(chat_id,m.message_id,None,'crowdfunding',False)
-    await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    await st.set_value('last_crowd_message_id', str(m.message_id))
-    await st.set_value('last_crowd_campaign_id', str(c.id))
-    await st.set_value('last_crowd_chat_id', str(chat_id))
-    return m.message_id
+    if not c: return []
+    return await _publish_campaign(bot,c,target)
+
 
 async def start_crowd_private(bot:Bot, user_id:int):
     c=await get_campaign()

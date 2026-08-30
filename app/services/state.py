@@ -47,15 +47,21 @@ async def status_text(chat_id:int):
     if not await is_main_group(chat_id):
         return '⚫ Chat non principal.'
     if not active:
-        return '🔴 AUCUNE OUVERTURE\n\nAucune session n’est prévue/active pour le moment.'
+        return '🔴 GROUPE FERMÉ\n\nAucune ouverture n’est prévue ce soir.\n\nMerci de revenir demain.'
+    auto_=await st.auto_enabled()
+    open_=await st.is_open()
+    # Auto OFF + groupe fermé = maintenance globale : A et B affichent le même
+    # message et restent utilisables uniquement pour les annonces du bot.
+    if not auto_ and not open_:
+        return '🔴 GROUPE FERMÉ\n\nAucune ouverture n’est prévue ce soir.\n\nMerci de revenir demain.'
     if chat_id != active:
         return '🔒 GROUPE INACTIF\n\nLa session est gérée dans l’autre groupe principal.'
     goal=await st.vote_goal(); votes=await vote_count(chat_id); slot=await st.time_slot(); s=get_settings()
     opening=slot.split('-')[0]; closing=slot.split('-')[1]
-    if not await st.auto_enabled():
-        if await st.is_open():
+    if not auto_:
+        if open_:
             return '🟢 GROUPE OUVERT\n\nVous pouvez envoyer vos médias <3\n\nMode manuel : fermeture de sécurité active.'
-        return '🔴 MAINTENANCE\n\nLe système est en maintenance ce soir.\n\nAucune ouverture prévue.'
+        return '🔴 GROUPE FERMÉ\n\nAucune ouverture n’est prévue ce soir.\n\nMerci de revenir demain.'
     if await st.is_open():
         return f'🟢 GROUPE OUVERT\n\nObjectif atteint : {votes} / {goal} ✅\n\nVous pouvez envoyer vos médias <3\n\nFermeture prévue à {closing}.'
     missing=max(goal-votes,0)
@@ -102,7 +108,19 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
     last_text=await st.get_value(text_key,'')
     from app.services.multigroup import active_group_id
     active=await active_group_id()
-    kb=None if chat_id != active or await st.is_open() or not await st.auto_enabled() else vote_kb()
+    open_=await st.is_open()
+    auto_=await st.auto_enabled()
+    if open_:
+        kb=None
+    elif not active or not auto_:
+        # Même fermé / sans ouverture, le groupe reste un point d'acquisition :
+        # le bouton ouvre le bot en privé et attribue un lien unique à ce groupe.
+        from app.services.invites import invite_kb
+        kb=await invite_kb(chat_id, button_text='🎁 Partager le groupe')
+    elif chat_id == active:
+        kb=vote_kb()
+    else:
+        kb=None
 
     if mid and recreate_on_change and last_text and text != last_text:
         try:

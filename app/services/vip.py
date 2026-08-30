@@ -106,22 +106,38 @@ async def send_vip_private(bot:Bot, user_id:int, preselect:str|None=None):
     items=await user_cart(user_id)
     await bot.send_message(user_id, await vip_menu_text(user_id), reply_markup=vip_private_kb(items))
 
-async def send_vip_ad(bot:Bot, force:bool=False):
-    if not force and not await st.is_open(): return None
-    from app.services.multigroup import active_group_id
-    chat_id=await active_group_id()
-    if not chat_id: return None
+async def send_vip_ad(bot:Bot, force:bool=False, target:str='active'):
+    """Publie l'offre VIP.
+
+    Automatique : groupe actif uniquement et seulement pendant l'ouverture.
+    Manuel (force=True) : A, B ou A+B même si les groupes sont fermés.
+    """
+    if not force and not await st.is_open():
+        return []
+    from app.services.multigroup import resolve_main_targets
+    targets=await resolve_main_targets(target, include_unavailable=False)
+    if not targets:
+        return []
     text=await st.get_value('vip_text','💎 ACCÈS VIP\n\nChoisissez une offre.')
     image=await st.get_value('vip_image_file_id','')
     kb=await vip_group_kb()
-    if image:
-        m=await bot.send_photo(chat_id,image,caption=text,reply_markup=kb)
-    else:
-        m=await bot.send_message(chat_id,text,reply_markup=kb)
-    await track(chat_id,m.message_id,None,'vip_ad',bool(image))
-    await st.set_value('last_vip_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-    await st.set_value('last_vip_message_id', str(m.message_id))
-    return m.message_id
+    sent=[]
+    for chat_id in targets:
+        try:
+            if image:
+                m=await bot.send_photo(chat_id,image,caption=text,reply_markup=kb)
+            else:
+                m=await bot.send_message(chat_id,text,reply_markup=kb)
+            await track(chat_id,m.message_id,None,'vip_ad',bool(image))
+            sent.append((chat_id,m.message_id))
+        except Exception as e:
+            await log_error(f'vip_ad:{chat_id}',e)
+    if sent:
+        await st.set_value('last_vip_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+        await st.set_value('last_vip_message_id', str(sent[-1][1]))
+        await st.set_value('last_vip_chat_ids', ','.join(str(x[0]) for x in sent))
+    return sent
+
 
 async def create_order_from_cart(user_id:int, username:str):
     items=await user_cart(user_id)
