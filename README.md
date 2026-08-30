@@ -1,35 +1,50 @@
-# Telegram Railway Bot V24
+# ANTIJAVANA CHAT — Multi-groupes central
 
-Corrections V24 :
+Bot Aiogram/PostgreSQL pour piloter deux groupes principaux avec les mêmes VIP et une modération globale.
 
-- VIP : un utilisateur qui possède déjà Pass Total ou VIP JAVANA ne peut plus acheter le Pass Soirée seul.
-- VIP : blocage des doublons Pass Total / VIP / Pass Soirée déjà actifs ou en attente.
-- Pass Soirée terminé à 05h : relance PV avec boutons 🎟 Pass Soirée prochaine session / 📦 Pass Total / 💎 VIP JAVANA.
-- Justice populaire : nouveaux membres protégés. Éligible seulement après vraie exposition :
-  - 0 média après au moins 3 sessions ouvertes connues ; ou
-  - aucun média depuis 14 sessions ouvertes connues.
-- Justice populaire : admins, trusted et bot protégés.
-- Notifications entrée/sortie : supprimées automatiquement.
-- Notifications de retrait pendant justice : restent visibles pendant la justice, mais sont maintenant suivies et supprimées au nettoyage/fermeture.
-- À chaque ouverture, les membres connus non protégés gagnent +1 session_present pour le calcul d’inactivité.
+## Architecture
 
-Rappel Telegram : le bot ne peut nettoyer que les messages qu'il voit depuis son lancement.
+- **1 bot**
+- **Groupe A + Groupe B**
+- **un seul groupe actif par soirée**, ou `AUCUN`
+- **VIP communs** : Pass soirée, Pass total, VIP JAVANA
+- **1 DB centrale** conservant les Hash-ban/fingerprints existants
 
-## V25 — Justice populaire configurable
+## Mise en route
 
-Inspection V24 : une limite existait déjà dans `app/services/justice.py` (`MAX_JUSTICE_REMOVALS = 20`), mais elle était codée en dur et le compteur affiché ne montrait que les candidats déjà limités.
+1. Déploie le code avec `BOT_TOKEN`, `DATABASE_URL`, `ADMIN_IDS`.
+2. Tu peux fournir les IDs existants dans `MAIN_GROUP_A_ID`, `MAIN_GROUP_B_ID` et les trois IDs VIP pour bootstrap.
+3. Sinon ajoute le bot admin dans chaque chat : les `ADMIN_IDS` recevront une demande de validation.
+4. Dans le panel : `🧩 Groupes / VIP` puis `🧪 Test infra`.
+5. Lance `🧪 Test réel VIP` pour vérifier envoi + suppression dans les trois VIP.
+6. Choisis `🌙 Groupe ce soir` : A, B ou aucune ouverture.
 
-V25 corrige ça :
-- limite configurée en base avec valeur par défaut `justice_limit=20` ;
-- menu `⚙️ Paramètres → ⚖️ Limite justice populaire` ;
-- boutons `−10`, `−1`, `+1`, `+10`, presets 10/20/30/50 ;
-- preview justice affiche : total éligible, limite, supprimés, reportés ;
-- justice auto et manuelle appliquent exactement la même limite ;
-- Santé affiche la limite et le nombre de justifiables actuels ;
-- rapport admin après justice : éligibles / supprimés / reportés / limite.
+## Fonctions centrales
 
-## V26 — Justice visible
+- Hash-ban global : ID Telegram + SHA256 + fingerprint perceptuel vidéo.
+- `/pedo` global A+B+VIP.
+- bans/mutes manuels synchronisés et persistants.
+- justice globale A+B mais sans ban permanent.
+- Anti-repost global ON/OFF.
+- crowdfunding, pubs, règles et broadcast dirigés vers le groupe actif.
+- Pass gratuit / Pass soirée communs aux mêmes VIP.
+- invitations globales : lien unique, score live, TOP 10 après justice, TOP 3 VIP avec contact manuel.
+- santé multi-chat et failover avec protection contre les pannes Telegram transitoires.
 
-Correction justice populaire : Telegram ne garantit pas une notification système visible quand un bot retire un membre via l'API. La V26 conserve le retrait réel par ban/unban, mais ajoute une notification publique courte `ANTIJAVANA CHAT removed @pseudo` pour chaque membre retiré.
+## Aucune ouverture
 
-Ces notifications sont suivies en base avec `kind='justice_removed_notification'` et restent visibles pendant les 5 minutes de justice. Elles sont supprimées automatiquement lors du nettoyage de fermeture.
+Si `🌑 Aucune ouverture` est sélectionné, les deux groupes restent fermés. Le scheduler continue pour la maintenance/sécurité mais aucune diffusion de session n'est lancée et les Pass soirée/gratuits ne sont pas libérés à 23h.
+
+## Migration
+
+Voir `MIGRATION.md` et `scripts/merge_legacy_database.py` pour fusionner la seconde ancienne DB sans perdre les Hash-ban/fingerprints.
+
+## Railway
+
+Commande :
+
+```text
+python -m app.main
+```
+
+Les nouvelles tables sont créées automatiquement au démarrage. Fais néanmoins un backup DB avant le premier déploiement multi-groupes.
