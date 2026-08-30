@@ -3,7 +3,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.filters import CommandStart
 from sqlalchemy import select
 from app.config import get_settings
-from app.keyboards.common import admin_kb, goal_kb, settings_kb, justice_kb, cleanup_kb, mod_kb, crowd_admin_kb, ads_admin_kb, confirm_kb, back_kb, rules_admin_kb, hashban_kb, vip_admin_kb, top_admin_kb, invite_admin_kb
+from app.keyboards.common import admin_kb, goal_kb, settings_kb, justice_kb, cleanup_kb, mod_kb, crowd_admin_kb, ads_admin_kb, confirm_kb, back_kb, rules_admin_kb, hashban_kb, vip_admin_kb, top_admin_kb, invite_admin_kb, publish_targets_kb
 from app.services import settings as st
 from app.services.session_ops import set_group_open, cleanup_session, count_known_bans_and_restrictions, presidential_pardon, ministerial_pardon
 from app.services.state import ensure_status_message, log_error
@@ -167,8 +167,16 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
         await set_group_open(bot,False,'manual')
         await cb.message.answer('🔴 Session fermée. Les groupes principaux sont fermés.')
     elif d=='adm_auto':
-        cur=await st.auto_enabled(); await st.set_value('auto_enabled','false' if cur else 'true'); chat=await active_group_id();
-        if chat: await ensure_status_message(bot,chat); await cb.message.answer(f'⏰ Horaire auto : {"OFF" if cur else "ON"}',reply_markup=admin_kb())
+        cur=await st.auto_enabled()
+        await st.set_value('auto_enabled','false' if cur else 'true')
+        from app.services.multigroup import sync_redirections, main_group_ids
+        await sync_redirections(bot)
+        for gid in await main_group_ids(include_unavailable=False):
+            try:
+                await ensure_status_message(bot,gid,recreate_on_change=True)
+            except Exception:
+                pass
+        await cb.message.answer(f'⏰ Horaire auto : {"OFF" if cur else "ON"}',reply_markup=admin_kb())
     elif d=='adm_goal': await cb.message.answer(f'📦 Objectif actuel : {await st.vote_goal()}\nChoisis un objectif ou personnalisé.',reply_markup=goal_kb())
     elif d=='adm_justice': await cb.message.answer('⚖️ Justice populaire\n\nAutomatique : 50% de la session.\nTest manuel disponible avec prévisualisation.',reply_markup=justice_kb())
     elif d=='adm_cleanup': await cb.message.answer('🧹 Nettoyage\n\nSi les médias ne se suppriment pas, vérifie que le bot est admin avec droit de suppression.',reply_markup=cleanup_kb())
@@ -177,7 +185,7 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     elif d=='adm_freepass': await cb.message.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif d=='adm_crowd': await cb.message.answer('💰 Crowdfunding',reply_markup=crowd_admin_kb())
     elif d=='adm_ads': await cb.message.answer('📢 Publicités',reply_markup=ads_admin_kb())
-    elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nUn lien actif par personne. Validation après 5 min. Classement global A+B. TOP 10 après la justice ; TOP 3 = VIP, contact manuel.',reply_markup=invite_admin_kb())
+    elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nUn lien actif par personne. Validation après 5 min. Classement global A+B. TOP 10 publié 2 fois pendant chaque ouverture (après la justice puis vers 75 % de session). TOP 3 = VIP, contact manuel.',reply_markup=invite_admin_kb())
     elif d=='adm_top': await cb.message.answer(await top_text(), reply_markup=top_admin_kb())
     elif d=='adm_mod': await cb.message.answer('🛡️ Modération\nAjoute les mots via boutons, sans commandes.',reply_markup=mod_kb())
     elif d=='adm_rules': await cb.message.answer('📜 Règles\n\nTu peux publier maintenant ou modifier le texte.',reply_markup=rules_admin_kb())
@@ -258,21 +266,35 @@ async def cb_cleanup_active(cb:CallbackQuery, bot:Bot):
 async def cb_cleanup_all(cb:CallbackQuery, bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     d,f=await cleanup_session(bot,all_known=True); await cb.message.answer(f'🧹 Nettoyage global suivi terminé.\nSupprimés : {d}\nÉchecs : {f}'); await cb.answer()
-@router.callback_query(F.data=='vip_send')
-async def cb_vip_send(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data=='vip_send_menu')
+async def cb_vip_send_menu(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
-        mid=await send_vip_ad(bot, force=True)
-        await cb.message.answer('💎 Pub VIP publiée maintenant.' if mid else '💎 VIP non publié : groupe fermé ou erreur.')
+        await cb.message.answer('💎 Publier la pub VIP où ?\n\nLa publication manuelle fonctionne même si le groupe est fermé.', reply_markup=publish_targets_kb('vip_send_target','adm_vip'))
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('vip_send_target:'))
+async def cb_vip_send_target(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        target=cb.data.split(':',1)[1]
+        sent=await send_vip_ad(bot, force=True, target=target)
+        await cb.message.answer(f'💎 Pub VIP publiée dans {len(sent)} groupe(s).' if sent else '💎 Aucun groupe cible accessible.')
         await cb.answer()
 
 @router.callback_query(F.data=='vip_health')
 async def cb_vip_health(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await vip_health_text()); await cb.answer()
-@router.callback_query(F.data=='crowd_send')
-async def cb_crowd_send(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data=='crowd_send_menu')
+async def cb_crowd_send_menu(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
-        mid=await send_crowd_ad(bot, force=True)
-        await cb.message.answer('💰 Crowdfunding publié maintenant.' if mid else '💰 Crowdfunding non publié : groupe fermé ou erreur.')
+        await cb.message.answer('💰 Publier le crowdfunding où ?', reply_markup=publish_targets_kb('crowd_send_target','adm_crowd'))
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('crowd_send_target:'))
+async def cb_crowd_send_target(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        target=cb.data.split(':',1)[1]
+        sent=await send_crowd_ad(bot, force=True, target=target)
+        await cb.message.answer(f'💰 Crowdfunding publié dans {len(sent)} groupe(s).' if sent else '💰 Aucun groupe cible accessible.')
         await cb.answer()
 
 @router.callback_query(F.data=='crowd_health')
@@ -321,21 +343,37 @@ async def cb_crowd_delete(cb:CallbackQuery):
         await cb.answer()
 
 
-@router.callback_query(F.data.startswith('crowd_send_one:'))
-async def cb_crowd_send_one(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data.startswith('crowd_send_one_menu:'))
+async def cb_crowd_send_one_menu(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
         cid=int(cb.data.split(':')[1])
-        mid=await send_campaign_by_id(bot,cid,force=True)
-        await cb.message.answer('💰 Campagne publiée maintenant.' if mid else 'Campagne introuvable ou erreur.')
+        await cb.message.answer(f'💰 Publier la campagne #{cid} où ?', reply_markup=publish_targets_kb(f'crowd_send_one_target:{cid}',f'crowd_manage:{cid}'))
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('crowd_send_one_target:'))
+async def cb_crowd_send_one_target(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        _p,cid_s,target=cb.data.split(':',2)
+        sent=await send_campaign_by_id(bot,int(cid_s),force=True,target=target)
+        await cb.message.answer(f'💰 Campagne publiée dans {len(sent)} groupe(s).' if sent else 'Campagne introuvable ou aucun groupe cible accessible.')
         await cb.answer()
 
 @router.callback_query(F.data=='crowd_stats')
 async def cb_crowd_stats(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await stats_text()); await cb.answer()
-@router.callback_query(F.data=='ad_send')
-async def cb_ad_send(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data=='ad_send_menu')
+async def cb_ad_send_menu(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
-        mid=await send_random_ad(bot); await cb.message.answer('📢 Pub envoyée.' if mid else 'Aucune pub active ou groupe fermé.'); await cb.answer()
+        await cb.message.answer('📢 Publier une publicité active où ?', reply_markup=publish_targets_kb('ad_send_target','adm_ads'))
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('ad_send_target:'))
+async def cb_ad_send_target(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        target=cb.data.split(':',1)[1]
+        sent=await send_random_ad(bot, force=True, target=target)
+        await cb.message.answer(f'📢 Pub envoyée dans {len(sent)} groupe(s).' if sent else 'Aucune pub active ou aucun groupe cible accessible.')
+        await cb.answer()
 @router.callback_query(F.data=='ad_health')
 async def cb_ad_health(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await ads_health_text()); await cb.answer()
@@ -353,12 +391,19 @@ async def cb_ad_manage(cb:CallbackQuery):
     await cb.answer()
 
 
-@router.callback_query(F.data.startswith('ad_send_one:'))
-async def cb_ad_send_one(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data.startswith('ad_send_one_menu:'))
+async def cb_ad_send_one_menu(cb:CallbackQuery):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     ad_id=int(cb.data.split(':')[1])
-    mid=await send_ad_by_id(bot, ad_id, force=True)
-    await cb.message.answer('📢 Pub publiée maintenant.' if mid else 'Pub introuvable ou erreur.')
+    await cb.message.answer(f'📢 Publier la pub #{ad_id} où ?', reply_markup=publish_targets_kb(f'ad_send_one_target:{ad_id}',f'ad_manage:{ad_id}'))
+    await cb.answer()
+
+@router.callback_query(F.data.startswith('ad_send_one_target:'))
+async def cb_ad_send_one_target(cb:CallbackQuery, bot:Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    _p,ad_s,target=cb.data.split(':',2)
+    sent=await send_ad_by_id(bot, int(ad_s), force=True, target=target)
+    await cb.message.answer(f'📢 Pub publiée dans {len(sent)} groupe(s).' if sent else 'Pub introuvable ou aucun groupe cible accessible.')
     await cb.answer()
 
 @router.callback_query(F.data.startswith('ad_toggle:'))
@@ -384,12 +429,19 @@ async def cb_mod_lists(cb:CallbackQuery):
         res=await db.execute(select(WordRule)); rows=list(res.scalars().all())
     text='🛡️ Listes modération\n\n'+'\n'.join([f'{r.kind}: {r.word}' for r in rows[-80:]]) if rows else 'Aucun mot configuré.'
     await cb.message.answer(text); await cb.answer()
-@router.callback_query(F.data=='rules_send')
-async def cb_rules_send(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data=='rules_send_menu')
+async def cb_rules_send_menu(cb:CallbackQuery):
+    if cb.from_user and is_admin(cb.from_user.id):
+        await cb.message.answer('📜 Publier les règles où ?', reply_markup=publish_targets_kb('rules_send_target','adm_rules'))
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('rules_send_target:'))
+async def cb_rules_send_target(cb:CallbackQuery, bot:Bot):
     if cb.from_user and is_admin(cb.from_user.id):
         from app.scheduler import rules_tick
-        mid=await rules_tick(bot, force=True)
-        await cb.message.answer('📜 Règles publiées maintenant.' if mid else '🌑 Aucun groupe actif : rien publié.')
+        target=cb.data.split(':',1)[1]
+        sent=await rules_tick(bot, force=True, target=target)
+        await cb.message.answer(f'📜 Règles publiées dans {len(sent)} groupe(s).' if sent else 'Aucun groupe cible accessible.')
         await cb.answer()
 
 @router.callback_query(F.data=='rules_health')
@@ -825,11 +877,18 @@ async def cb_justice_limit_set(cb:CallbackQuery):
 async def cb_noop(cb:CallbackQuery):
     await cb.answer()
 
-@router.callback_query(F.data=='invite_send')
-async def cb_invite_send(cb:CallbackQuery, bot:Bot):
+@router.callback_query(F.data=='invite_send_menu')
+async def cb_invite_send_menu(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
-        mid=await send_invite_ad(bot, force=True)
-        await cb.message.answer('🎁 Message invitations publié maintenant.' if mid else 'Erreur publication invitations.')
+        await cb.message.answer('🎁 Publier le message invitations où ?', reply_markup=publish_targets_kb('invite_send_target','adm_invites'))
+        await cb.answer()
+
+@router.callback_query(F.data.startswith('invite_send_target:'))
+async def cb_invite_send_target(cb:CallbackQuery, bot:Bot):
+    if cb.from_user and is_admin(cb.from_user.id):
+        target=cb.data.split(':',1)[1]
+        sent=await send_invite_ad(bot, force=True, target=target)
+        await cb.message.answer(f'🎁 Message invitations publié dans {len(sent)} groupe(s).' if sent else 'Aucun groupe cible accessible.')
         await cb.answer()
 
 @router.callback_query(F.data=='invite_health')
