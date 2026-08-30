@@ -33,6 +33,7 @@ from app.services.anti_repost import (
     enforce_known_match as enforce_anti_repost_match,
     find_repost_by_id,
     find_repost_by_sha,
+    find_repost_by_perceptual,
     remember_stored_keys,
 )
 
@@ -145,20 +146,15 @@ async def restrict(bot: Bot, chat_id: int, user_id: int, days: int) -> bool:
         return False
     until = datetime.utcnow() + timedelta(days=days)
     try:
-        await bot.restrict_chat_member(
-            chat_id,
-            user_id,
-            permissions=ChatPermissions(can_send_messages=False),
-            until_date=until,
+        from app.services.multigroup import global_mute
+        return await global_mute(
+            bot, user_id, until,
+            source_chat_id=chat_id,
+            source='moderation',
+            reason=f'restriction {days} jour(s)',
         )
-        async with SessionLocal() as db:
-            user = await db.get(User, user_id)
-            if user:
-                user.is_restricted = True
-            await db.commit()
-        return True
     except Exception as exc:
-        await log_error("restrict", exc)
+        await log_error('restrict_global', exc)
         return False
 
 
@@ -166,15 +162,14 @@ async def ban(bot: Bot, chat_id: int, user_id: int) -> bool:
     if await protected(user_id):
         return False
     try:
-        await bot.ban_chat_member(chat_id, user_id)
-        async with SessionLocal() as db:
-            user = await db.get(User, user_id)
-            if user:
-                user.is_banned = True
-            await db.commit()
-        return True
+        from app.services.multigroup import global_ban
+        return await global_ban(
+            bot, user_id,
+            source_chat_id=chat_id,
+            source='moderation',
+        )
     except Exception as exc:
-        await log_error("ban", exc)
+        await log_error('ban_global', exc)
         return False
 
 
@@ -236,7 +231,14 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
         return False
 
     await track(msg.chat.id, msg.message_id, msg.from_user.id, "message", is_media(msg))
-    if msg.chat.id != _SETTINGS.main_group_id:
+    from app.services.multigroup import is_main_group, active_group_id
+    if not await is_main_group(msg.chat.id):
+        return True
+    active = await active_group_id()
+    if msg.chat.id != active:
+        if msg.from_user.id not in _SETTINGS.all_admin_ids:
+            await delete(bot, msg)
+            return False
         return True
 
     uid = msg.from_user.id
@@ -313,6 +315,12 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
                         message_id=msg.message_id,
                     )
                     return False
+
+                if anti_repost_on:
+                    repost, method = await find_repost_by_perceptual(probe, msg)
+                    if repost:
+                        await enforce_anti_repost_match(bot, msg, method)
+                        return False
 
                 await record_media(msg, bot=bot, probe=probe)
                 remember_stored_keys(msg, probe.sha256)

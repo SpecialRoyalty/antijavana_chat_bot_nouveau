@@ -42,6 +42,14 @@ async def add_vote(chat_id:int,user_id:int):
         return inserted is not None
 
 async def status_text(chat_id:int):
+    from app.services.multigroup import active_group_id, is_main_group
+    active = await active_group_id()
+    if not await is_main_group(chat_id):
+        return '⚫ Chat non principal.'
+    if not active:
+        return '🔴 AUCUNE OUVERTURE\n\nAucune session n’est prévue/active pour le moment.'
+    if chat_id != active:
+        return '🔒 GROUPE INACTIF\n\nLa session est gérée dans l’autre groupe principal.'
     goal=await st.vote_goal(); votes=await vote_count(chat_id); slot=await st.time_slot(); s=get_settings()
     opening=slot.split('-')[0]; closing=slot.split('-')[1]
     if not await st.auto_enabled():
@@ -88,9 +96,13 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
     publier immédiatement un nouveau message d'état.
     """
     text=await status_text(chat_id)
-    mid=await st.get_value('status_message_id','')
-    last_text=await st.get_value('status_last_text','')
-    kb=None if await st.is_open() or not await st.auto_enabled() else vote_kb()
+    mid_key=f'status_message_id:{chat_id}'
+    text_key=f'status_last_text:{chat_id}'
+    mid=await st.get_value(mid_key,'')
+    last_text=await st.get_value(text_key,'')
+    from app.services.multigroup import active_group_id
+    active=await active_group_id()
+    kb=None if chat_id != active or await st.is_open() or not await st.auto_enabled() else vote_kb()
 
     if mid and recreate_on_change and last_text and text != last_text:
         try:
@@ -128,7 +140,7 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
             _STATUS_LAST_VERIFY[chat_id]=now_mono
             from datetime import datetime
             await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
-            await st.set_value('status_last_text', text)
+            await st.set_value(text_key, text)
             return int(mid)
         except TelegramBadRequest as e:
             low=str(e).lower()
@@ -148,8 +160,8 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
             raise
 
     m=await bot.send_message(chat_id,text,reply_markup=kb)
-    await st.set_value('status_message_id',str(m.message_id))
-    await st.set_value('status_last_text', text)
+    await st.set_value(mid_key,str(m.message_id))
+    await st.set_value(text_key, text)
     from datetime import datetime
     await st.set_value('last_status_update_at', datetime.utcnow().isoformat(timespec='seconds'))
     await track(chat_id,m.message_id,None,'status',False)
@@ -158,7 +170,7 @@ async def ensure_status_message(bot:Bot, chat_id:int, recreate_on_change:bool=Fa
     return m.message_id
 
 async def cleanup_known_status_duplicates(bot:Bot, chat_id:int):
-    keep=int(await st.get_value('status_message_id','0') or '0')
+    keep=int(await st.get_value(f'status_message_id:{chat_id}','0') or '0')
     async with SessionLocal() as db:
         rows=list((await db.execute(
             select(TrackedMessage.id,TrackedMessage.message_id).where(

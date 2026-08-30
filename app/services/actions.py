@@ -122,12 +122,14 @@ async def trusted_command(bot: Bot, msg: Message) -> bool:
                 except Exception:
                     pass
 
-            await ban(bot, msg.chat.id, uid)
+            from app.services.multigroup import global_ban, main_group_ids
+            await global_ban(bot, uid, source_chat_id=msg.chat.id, source='pedo', reason='/pedo', created_by=msg.from_user.id)
 
+            group_ids=await main_group_ids()
             async with SessionLocal() as db:
                 tracked_rows = list((await db.execute(
                     select(TrackedMessage.id, TrackedMessage.chat_id, TrackedMessage.message_id).where(
-                        TrackedMessage.chat_id == msg.chat.id,
+                        TrackedMessage.chat_id.in_(group_ids) if group_ids else TrackedMessage.chat_id == msg.chat.id,
                         TrackedMessage.user_id == uid,
                         TrackedMessage.deleted.is_(False),
                     )

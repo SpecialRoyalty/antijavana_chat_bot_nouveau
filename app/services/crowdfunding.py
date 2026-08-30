@@ -101,20 +101,24 @@ async def campaigns_kb():
 
 async def send_crowd_ad(bot:Bot, force:bool=False):
     if not force and not await st.is_open(): return None
-    c=await random_active_campaign(); s=get_settings()
+    c=await random_active_campaign()
+    from app.services.multigroup import active_group_id
+    chat_id=await active_group_id()
+    if not chat_id: return None
     text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
     kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
     
     if c.image_file_id:
-        m=await bot.send_photo(s.main_group_id,c.image_file_id,caption=text,reply_markup=kb)
-        await track(s.main_group_id,m.message_id,None,'crowdfunding',True)
+        m=await bot.send_photo(chat_id,c.image_file_id,caption=text,reply_markup=kb)
+        await track(chat_id,m.message_id,None,'crowdfunding',True)
     else:
-        m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
-        await track(s.main_group_id,m.message_id,None,'crowdfunding',False)
+        m=await bot.send_message(chat_id,text,reply_markup=kb)
+        await track(chat_id,m.message_id,None,'crowdfunding',False)
     from datetime import datetime
     await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     await st.set_value('last_crowd_message_id', str(m.message_id))
     await st.set_value('last_crowd_campaign_id', str(c.id))
+    await st.set_value('last_crowd_chat_id', str(chat_id))
     return m.message_id
 
 async def send_campaign_by_id(bot:Bot, cid:int, force:bool=True):
@@ -122,18 +126,21 @@ async def send_campaign_by_id(bot:Bot, cid:int, force:bool=True):
     async with SessionLocal() as db:
         c=await db.get(Crowdfunding,cid)
     if not c: return None
-    s=get_settings()
+    from app.services.multigroup import active_group_id
+    chat_id=await active_group_id()
+    if not chat_id: return None
     text=f'{c.text or c.title}\n\nObjectif :\n{c.current_amount}€ / {c.target_amount}€\n\n{bar(c.current_amount,c.target_amount)}'
     kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
     if c.image_file_id:
-        m=await bot.send_photo(s.main_group_id,c.image_file_id,caption=text,reply_markup=kb)
-        await track(s.main_group_id,m.message_id,None,'crowdfunding',True)
+        m=await bot.send_photo(chat_id,c.image_file_id,caption=text,reply_markup=kb)
+        await track(chat_id,m.message_id,None,'crowdfunding',True)
     else:
-        m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
-        await track(s.main_group_id,m.message_id,None,'crowdfunding',False)
+        m=await bot.send_message(chat_id,text,reply_markup=kb)
+        await track(chat_id,m.message_id,None,'crowdfunding',False)
     await st.set_value('last_crowd_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     await st.set_value('last_crowd_message_id', str(m.message_id))
     await st.set_value('last_crowd_campaign_id', str(c.id))
+    await st.set_value('last_crowd_chat_id', str(chat_id))
     return m.message_id
 
 async def start_crowd_private(bot:Bot, user_id:int):
@@ -230,9 +237,13 @@ async def refresh_last_crowd_message(bot:Bot, cid:int):
     kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='💰 Je participe',callback_data='crowd_join')]])
     try:
         if c.image_file_id:
-            await bot.edit_message_caption(chat_id=get_settings().main_group_id, message_id=int(mid), caption=text, reply_markup=kb)
+            chat_id=int(await st.get_value('last_crowd_chat_id','0') or '0')
+            if not chat_id: return
+            await bot.edit_message_caption(chat_id=chat_id, message_id=int(mid), caption=text, reply_markup=kb)
         else:
-            await bot.edit_message_text(text, chat_id=get_settings().main_group_id, message_id=int(mid), reply_markup=kb)
+            chat_id=int(await st.get_value('last_crowd_chat_id','0') or '0')
+            if not chat_id: return
+            await bot.edit_message_text(text, chat_id=chat_id, message_id=int(mid), reply_markup=kb)
     except Exception:
         pass
 

@@ -131,6 +131,12 @@ async def init_defaults() -> None:
         'anti_repost_last_method': '',
         'anti_repost_last_deleted': '0',
         'anti_repost_last_failed': '0',
+        'selected_group_role': '',
+        'active_group_chat_id': '',
+        'session_suspended': 'false',
+        'last_failover_at': '',
+        'invite_competition_started_at': '',
+        'invite_top_last_session': '',
     }
 
     # Un seul SELECT + un seul COMMIT au lieu d'un get/set pour chaque clé.

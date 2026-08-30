@@ -38,7 +38,8 @@ async def window_minutes() -> int:
 async def register_join(event: ChatMemberUpdated) -> None:
     """Enregistre/réinitialise l'heure d'arrivée réelle d'un membre du groupe principal."""
     global _JOIN_CACHE_NEXT_CLEANUP
-    if event.chat.id != get_settings().main_group_id:
+    from app.services.multigroup import is_main_group
+    if not await is_main_group(event.chat.id):
         return
     member = getattr(event.new_chat_member, 'user', None) or event.from_user
     if not member or await protected(member.id):
@@ -90,7 +91,7 @@ async def remaining_seconds(user_id: int) -> int | None:
     if not await enabled():
         return None
     joined = await _joined_at(user_id)
-    if not joined or joined[0] != get_settings().main_group_id:
+    if not joined:
         return None
     limit = timedelta(minutes=await window_minutes())
     remaining = (joined[1] + limit - datetime.utcnow()).total_seconds()
@@ -99,7 +100,10 @@ async def remaining_seconds(user_id: int) -> int | None:
 
 async def should_ban_for_fast_media(msg: Message) -> bool:
     """True uniquement pour un média publié dans la fenêtre suivant une arrivée connue."""
-    if not msg.from_user or msg.chat.id != get_settings().main_group_id:
+    if not msg.from_user:
+        return False
+    from app.services.multigroup import is_main_group
+    if not await is_main_group(msg.chat.id):
         return False
     if await protected(msg.from_user.id) or not await enabled():
         return False

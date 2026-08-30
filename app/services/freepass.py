@@ -214,40 +214,52 @@ async def publish_free_pass(bot:Bot):
         return 'window_closed'
     if await is_published_this_session():
         return 'already_published'
-    s=get_settings(); old=await st.get_value('free_pass_message_id','')
+    from app.services.multigroup import active_group_id
+    chat_id=await active_group_id()
+    if not chat_id: return None
+    old=await st.get_value('free_pass_message_id','')
     if old:
-        try: await bot.delete_message(s.main_group_id,int(old))
+        old_chat=int(await st.get_value('free_pass_chat_id','0') or '0')
+        try: await bot.delete_message(old_chat or chat_id,int(old))
         except Exception: pass
-    m=await bot.send_message(s.main_group_id, await free_pass_text(), reply_markup=await free_pass_kb())
+    m=await bot.send_message(chat_id, await free_pass_text(), reply_markup=await free_pass_kb())
     await st.set_value('free_pass_message_id',str(m.message_id))
     await st.set_value('free_pass_published_session', session_key_now())
-    await track(s.main_group_id,m.message_id,None,'free_pass_ad',False)
+    await st.set_value('free_pass_chat_id', str(chat_id))
+    await track(chat_id,m.message_id,None,'free_pass_ad',False)
     await st.set_value('last_free_pass_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     return m.message_id
 
 async def refresh_free_pass_message(bot:Bot):
-    s=get_settings(); mid=await st.get_value('free_pass_message_id','')
-    if not mid: return
+    mid=await st.get_value('free_pass_message_id','')
+    chat_id=int(await st.get_value('free_pass_chat_id','0') or '0')
+    if not mid or not chat_id: return
     try:
-        await bot.edit_message_text(await free_pass_text(), chat_id=s.main_group_id, message_id=int(mid), reply_markup=await free_pass_kb())
+        await bot.edit_message_text(await free_pass_text(), chat_id=chat_id, message_id=int(mid), reply_markup=await free_pass_kb())
     except Exception:
         pass
 
 async def delete_free_pass_campaign(bot:Bot|None=None):
-    s=get_settings(); mid=await st.get_value('free_pass_message_id','')
-    if bot and mid:
-        try: await bot.delete_message(s.main_group_id,int(mid))
+    mid=await st.get_value('free_pass_message_id','')
+    chat_id=int(await st.get_value('free_pass_chat_id','0') or '0')
+    if bot and mid and chat_id:
+        try: await bot.delete_message(chat_id,int(mid))
         except Exception: pass
     await st.set_value('free_pass_message_id','')
+    await st.set_value('free_pass_chat_id','')
     await st.set_value('free_pass_published_session','')
     await st.set_value('free_pass_enabled','false')
     return True
 
 async def send_due_free_pass_links(bot:Bot, force:bool=False, only_user_id:int|None=None):
     if not force and datetime.now(ZoneInfo(get_settings().timezone)).hour != 23: return 0
-    s=get_settings(); gid=s.pass_soiree_group_id
+    # A+B sur AUCUNE ouverture : aucune libération de Pass soirée ce soir.
+    from app.services.multigroup import chat_id_for_role, ROLE_VIP_SOIREE, active_group_id
+    if not await st.is_open() or not await active_group_id():
+        return 0
+    gid=await chat_id_for_role(ROLE_VIP_SOIREE, include_unavailable=False)
     if not gid:
-        await log_error('free_pass','PASS_SOIREE_GROUP_ID non configuré')
+        await log_error('free_pass','VIP Pass soirée non configuré/validé')
         return 0
     async with SessionLocal() as db:
         q=select(FreePassReservation).where(FreePassReservation.status=='reserved')
@@ -289,3 +301,25 @@ async def reset_current_session():
         for r in res.scalars().all():
             r.status='rejected'; n+=1
         await db.commit(); return n
+
+
+async def relocate_free_pass_message(bot: Bot) -> int | None:
+    """Republie une campagne déjà verrouillée dans le nouveau groupe actif après failover."""
+    if not await is_published_this_session():
+        return None
+    from app.services.multigroup import active_group_id
+    target=await active_group_id()
+    if not target:
+        return None
+    old_mid=await st.get_value('free_pass_message_id','')
+    old_chat=int(await st.get_value('free_pass_chat_id','0') or '0')
+    if old_mid and old_chat and old_chat != target:
+        try:
+            await bot.delete_message(old_chat, int(old_mid))
+        except Exception:
+            pass
+    m=await bot.send_message(target, await free_pass_text(), reply_markup=await free_pass_kb())
+    await st.set_value('free_pass_message_id', str(m.message_id))
+    await st.set_value('free_pass_chat_id', str(target))
+    await track(target, m.message_id, None, 'free_pass_ad', False)
+    return m.message_id

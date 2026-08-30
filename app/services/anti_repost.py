@@ -10,10 +10,10 @@ from aiogram.types import Message
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.db.models import MediaHash
+from app.db.models import MediaHash, VideoFingerprint
 from app.db.session import SessionLocal
 from app.services import settings as st
-from app.services.hashban import file_sha256, media_file_entries, related_media_messages
+from app.services.hashban import file_sha256, media_file_entries, related_media_messages, ensure_probe_perceptual, _compare_fingerprints, _compatible_metadata, _media_metadata
 from app.services.state import log_error, track
 from app.services.users import display_name, protected
 
@@ -81,6 +81,29 @@ async def find_repost(bot: Bot, msg: Message) -> tuple[bool, str]:
     return await find_repost_by_sha(sha)
 
 
+
+async def find_repost_by_perceptual(probe, msg: Message) -> tuple[bool, str]:
+    """Détection vidéo perceptuelle d'un contenu déjà publié, sans sanction ban."""
+    if probe is None or probe.media_type not in {'video','video_note','animation'}:
+        return False, ''
+    fingerprint=await ensure_probe_perceptual(probe, msg)
+    if not fingerprint:
+        return False, ''
+    _size,duration,width,height=_media_metadata(msg)
+    async with SessionLocal() as db:
+        q=select(VideoFingerprint).where(VideoFingerprint.banned.is_(False))
+        if duration is not None:
+            delta=max(2, int(max(duration,1)*0.12))
+            q=q.where(VideoFingerprint.duration.between(max(0,duration-delta), duration+delta))
+        rows=list((await db.execute(q)).scalars().all())
+    for row in rows:
+        if not _compatible_metadata(duration,width,height,row.duration,row.width,row.height):
+            continue
+        matched,similarity=_compare_fingerprints(fingerprint,row.fingerprint)
+        if matched:
+            return True, f'perceptual_video:{similarity:.1f}%'
+    return False, ''
+
 async def _delete_album_or_message(bot: Bot, msg: Message) -> tuple[int, int]:
     targets = related_media_messages(msg) if msg.media_group_id else [msg]
     seen: set[tuple[int, int]] = set()
@@ -138,7 +161,10 @@ async def enforce_known_match(bot: Bot, msg: Message, method: str) -> bool:
 
 
 async def enforce(bot: Bot, msg: Message) -> bool:
-    if not msg.from_user or msg.chat.id != get_settings().main_group_id:
+    if not msg.from_user:
+        return False
+    from app.services.multigroup import is_main_group
+    if not await is_main_group(msg.chat.id):
         return False
     if await protected(msg.from_user.id) or not await enabled() or not media_file_entries(msg):
         return False

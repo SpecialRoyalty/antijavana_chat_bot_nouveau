@@ -85,14 +85,17 @@ async def send_ad_by_id(bot:Bot, ad_id:int, force:bool=True):
     async with SessionLocal() as db:
         ad=await db.get(Advertisement, ad_id)
     if not ad: return None
-    s=get_settings(); kb=None
+    from app.services.multigroup import active_group_id
+    chat_id=await active_group_id()
+    if not chat_id: return None
+    kb=None
     if ad.button_text and ad.button_url:
         kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=ad.button_text,url=ad.button_url)]])
     if ad.image_file_id:
-        m=await bot.send_photo(s.main_group_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
+        m=await bot.send_photo(chat_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
     else:
-        m=await bot.send_message(s.main_group_id,ad.text or '📢 Publicité',reply_markup=kb)
-    await track(s.main_group_id,m.message_id,None,'ad',bool(ad.image_file_id))
+        m=await bot.send_message(chat_id,ad.text or '📢 Publicité',reply_markup=kb)
+    await track(chat_id,m.message_id,None,'ad',bool(ad.image_file_id))
     from datetime import datetime
     await st.set_value('last_ad_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     await st.set_value('last_ad_message_id', str(m.message_id))
@@ -105,15 +108,18 @@ async def send_random_ad(bot:Bot, force:bool=False):
         res=await db.execute(select(Advertisement).where(Advertisement.active==True))
         ads=list(res.scalars().all())
     if not ads: return None
-    ad=random.choice(ads); s=get_settings()
+    ad=random.choice(ads)
+    from app.services.multigroup import active_group_id
+    chat_id=await active_group_id()
+    if not chat_id: return None
     kb=None
     if ad.button_text and ad.button_url:
         kb=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=ad.button_text,url=ad.button_url)]])
     if ad.image_file_id:
-        m=await bot.send_photo(s.main_group_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
+        m=await bot.send_photo(chat_id,ad.image_file_id,caption=ad.text or None,reply_markup=kb)
     else:
-        m=await bot.send_message(s.main_group_id,ad.text or '📢 Publicité',reply_markup=kb)
-    await track(s.main_group_id,m.message_id,None,'ad',bool(ad.image_file_id))
+        m=await bot.send_message(chat_id,ad.text or '📢 Publicité',reply_markup=kb)
+    await track(chat_id,m.message_id,None,'ad',bool(ad.image_file_id))
     from datetime import datetime
     await st.set_value('last_ad_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     await st.set_value('last_ad_message_id', str(m.message_id))

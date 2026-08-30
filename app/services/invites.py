@@ -1,206 +1,348 @@
+from __future__ import annotations
+
 from datetime import datetime, timedelta
-import json
-import re
-import unicodedata
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from aiogram import Bot
-from aiogram.types import ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton, Message
-from app.db.session import SessionLocal
-from app.db.models import User, InviteLink
-from app.services.users import upsert_user, protected
+from aiogram.types import ChatMemberUpdated, InlineKeyboardMarkup, InlineKeyboardButton
+
 from app.config import get_settings
+from app.db.session import SessionLocal
+from app.db.models import User, InviteOwner, InviteCredit, InviteCompetition
+from app.services.users import upsert_user, protected
 from app.services.moderation import matched_word_rule
 from app.services.state import log_error, track
 from app.services import settings as st
+from app.services.multigroup import active_group_id, is_main_group
 
-JOIN_CACHE: dict[int, tuple[int|None, datetime]] = {}
-
-
-def _name_tokens(value: str) -> list[str]:
-    """Normalise un nom puis le découpe en mots distincts.
-
-    Les espaces, tirets, points, underscores et caractères spéciaux sont
-    considérés comme des séparateurs. Une règle courte comme ``cp`` ne
-    correspond donc pas à ``jecpquoi``, mais correspond à ``je_cp_quoi``.
-    """
-    normalized = unicodedata.normalize("NFKC", value or "").casefold()
-    return re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
+VALID_MEMBER_STATUSES = {'member', 'administrator', 'creator', 'restricted'}
 
 
-def _contains_name_rule(rule: str, tokens: list[str]) -> bool:
-    """Recherche une règle sous forme de mot ou de suite de mots entiers."""
-    rule_tokens = _name_tokens(rule)
-    if not rule_tokens or len(rule_tokens) > len(tokens):
-        return False
-    size = len(rule_tokens)
-    return any(tokens[index:index + size] == rule_tokens for index in range(len(tokens) - size + 1))
+def _status_value(value) -> str:
+    return str(getattr(value, 'value', value) or '').lower()
 
 
 async def matches_nameban(username: str | None, full_name: str | None) -> tuple[bool, str | None]:
-    """Retourne la règle nameban trouvée, avec le même cache que la modération."""
-    rule = await matched_word_rule("nameban", f"{username or ''} {full_name or ''}")
+    rule = await matched_word_rule('nameban', f'{username or ""} {full_name or ""}')
     return rule is not None, rule
 
-DEFAULT_TIERS=[
-    {"count":1,"label":"1 vidéo","link":""},
-    {"count":10,"label":"20 vidéos","link":""},
-    {"count":50,"label":"100 vidéos","link":""},
-    {"count":100,"label":"200 vidéos","link":""},
-    {"count":300,"label":"500 vidéos","link":""},
-    {"count":500,"label":"1 500 vidéos","link":""},
-    {"count":1000,"label":"VIP gratuit à vie","link":""},
-]
-
-async def tiers():
-    raw=await st.get_value('invite_tiers_json','')
-    if not raw:
-        return DEFAULT_TIERS
-    try:
-        data=json.loads(raw)
-        return data if isinstance(data,list) else DEFAULT_TIERS
-    except Exception:
-        return DEFAULT_TIERS
-
-async def set_tiers_from_text(text:str):
-    # Format: 1|Label|https://gofile... une ligne par palier
-    rows=[]
-    for line in (text or '').splitlines():
-        parts=[p.strip() for p in line.split('|')]
-        if len(parts)>=3 and parts[0].isdigit():
-            rows.append({'count':int(parts[0]),'label':parts[1],'link':parts[2]})
-    if not rows:
-        return False
-    rows=sorted(rows,key=lambda x:x['count'])
-    await st.set_value('invite_tiers_json', json.dumps(rows, ensure_ascii=False))
-    return True
 
 async def invite_text():
-    return await st.get_value('invite_text','🎁 Programme de récompenses\n\nInvite des membres et débloque tes récompenses.')
+    return await st.get_value(
+        'invite_text',
+        '🎁 CLASSEMENT INVITATIONS\n\nInvite des membres avec ton lien personnel.\nChaque invitation validée augmente ton classement.\n\n🏆 Le TOP 3 remporte un accès VIP. Les gagnants seront contactés manuellement.'
+    )
 
-async def invite_kb():
-    username=get_settings().public_bot_username.strip().lstrip('@')
-    url=f'https://t.me/{username}?start=invite' if username else None
-    if url:
-        return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🎁 Recevoir vidéos', url=url)]])
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='🎁 Recevoir vidéos', callback_data='invite_private')]])
 
-async def send_invite_ad(bot:Bot, force:bool=False):
-    if not force and not await st.is_open(): return None
-    text=await invite_text(); img=await st.get_value('invite_image_file_id','')
-    kb=await invite_kb(); s=get_settings()
+async def invite_kb(chat_id: int):
+    username = get_settings().public_bot_username.strip().lstrip('@')
+    if username:
+        return InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text='🎁 Obtenir mon lien', url=f'https://t.me/{username}?start=invite_{chat_id}')
+        ]])
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text='🎁 Obtenir mon lien', callback_data=f'invite_private:{chat_id}')
+    ]])
+
+
+async def send_invite_ad(bot: Bot, force: bool = False):
+    if not force and not await st.is_open():
+        return None
+    chat_id = await active_group_id()
+    if not chat_id:
+        return None
+    text = await invite_text()
+    img = await st.get_value('invite_image_file_id', '')
+    kb = await invite_kb(chat_id)
     if img:
-        m=await bot.send_photo(s.main_group_id,img,caption=text,reply_markup=kb)
-        await track(s.main_group_id,m.message_id,None,'invite_ad',True)
+        m = await bot.send_photo(chat_id, img, caption=text, reply_markup=kb)
+        await track(chat_id, m.message_id, None, 'invite_ad', True)
     else:
-        m=await bot.send_message(s.main_group_id,text,reply_markup=kb)
-        await track(s.main_group_id,m.message_id,None,'invite_ad',False)
+        m = await bot.send_message(chat_id, text, reply_markup=kb)
+        await track(chat_id, m.message_id, None, 'invite_ad', False)
     await st.set_value('last_invite_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
     await st.set_value('last_invite_message_id', str(m.message_id))
     return m.message_id
 
-async def get_or_create_link(bot:Bot, owner_id:int):
+
+async def _owner(owner_id: int) -> InviteOwner | None:
     async with SessionLocal() as db:
-        res=await db.execute(select(InviteLink).where(InviteLink.owner_id==owner_id,InviteLink.active==True).order_by(InviteLink.id.desc()).limit(1))
-        row=res.scalar_one_or_none()
-        if row and row.link:
-            return row.link
-    link_obj=await bot.create_chat_invite_link(get_settings().main_group_id, name=f'invite_{owner_id}', creates_join_request=False)
-    link=link_obj.invite_link
+        return await db.get(InviteOwner, owner_id)
+
+
+async def _ensure_competition() -> None:
     async with SessionLocal() as db:
-        db.add(InviteLink(owner_id=owner_id,link=link,active=True))
+        current = (await db.execute(select(InviteCompetition).where(InviteCompetition.active.is_(True)).limit(1))).scalar_one_or_none()
+        if not current:
+            db.add(InviteCompetition(active=True, started_at=datetime.utcnow(), note='Classement invitations'))
+            await db.commit()
+
+
+async def get_or_create_link(bot: Bot, owner_id: int, requested_chat_id: int | None = None):
+    await _ensure_competition()
+    async with SessionLocal() as db:
+        row = await db.get(InviteOwner, owner_id)
+        if row and row.active and not row.released and row.invite_link:
+            return row.invite_link, row.group_chat_id
+
+    target = requested_chat_id if requested_chat_id and await is_main_group(requested_chat_id) else await active_group_id()
+    if not target:
+        raise RuntimeError('Aucun groupe principal actif/disponible pour créer le lien.')
+
+    obj = await bot.create_chat_invite_link(target, name=f'invite_{owner_id}', creates_join_request=False)
+    link = obj.invite_link
+    async with SessionLocal() as db:
+        row = await db.get(InviteOwner, owner_id)
+        if not row:
+            row = InviteOwner(owner_id=owner_id, score=0)
+            db.add(row)
+        row.group_chat_id = target
+        row.invite_link = link
+        row.active = True
+        row.released = False
+        row.updated_at = datetime.utcnow()
         await db.commit()
-    return link
+    return link, target
 
-async def send_invite_private(bot:Bot, user_id:int):
-    link=await get_or_create_link(bot,user_id)
-    t=await tiers()
-    lines=['🎁 Ton lien unique','',link,'','Chaque invité validé augmente ton compteur.','', 'Paliers :']
-    for r in t:
-        lines.append(f"- {r['count']} invité(s) → {r['label']}")
-    await bot.send_message(user_id,'\n'.join(lines))
 
-async def on_join(event:ChatMemberUpdated, bot:Bot|None=None):
-    if not event.new_chat_member or event.new_chat_member.status not in ('member','restricted'): return
-    u=await upsert_user(event.from_user)
-    name_banned, matched_rule = await matches_nameban(
-        event.from_user.username,
-        event.from_user.full_name,
+async def rank_for(owner_id: int) -> tuple[int | None, int]:
+    async with SessionLocal() as db:
+        me = await db.get(InviteOwner, owner_id)
+        if not me:
+            return None, 0
+        higher = int((await db.execute(
+            select(func.count(InviteOwner.owner_id)).where(InviteOwner.score > me.score)
+        )).scalar() or 0)
+        return higher + 1, me.score
+
+
+async def send_invite_private(bot: Bot, user_id: int, requested_chat_id: int | None = None):
+    try:
+        link, group_id = await get_or_create_link(bot, user_id, requested_chat_id)
+    except RuntimeError:
+        await bot.send_message(user_id, '🌑 Aucun groupe disponible pour créer un lien pour le moment. Ton classement reste conservé.')
+        return
+    rank, score = await rank_for(user_id)
+    await bot.send_message(
+        user_id,
+        '🎁 TON LIEN D’INVITATION\n\n'
+        f'{link}\n\n'
+        f'Invitations validées : {score}\n'
+        f'Classement actuel : #{rank or "-"}\n\n'
+        '🏆 Le TOP 3 remporte un accès VIP.\n'
+        'Les gagnants seront contactés manuellement.\n\n'
+        'Tu gardes un seul lien actif. S’il est rattaché à un groupe indisponible, il sera libéré sans perdre ton score.'
     )
-    if bot and name_banned and not await protected(event.from_user.id):
+
+
+async def on_join(event: ChatMemberUpdated, bot: Bot | None = None):
+    member = getattr(event.new_chat_member, 'user', None)
+    if not member or getattr(member, 'is_bot', False) or _status_value(event.new_chat_member.status) not in ('member', 'restricted'):
+        return
+    await upsert_user(member)
+
+    name_banned, matched_rule = await matches_nameban(member.username, member.full_name)
+    if bot and name_banned and not await protected(member.id):
         try:
-            await bot.ban_chat_member(event.chat.id, event.from_user.id)
-            async with SessionLocal() as db:
-                stored_user = await db.get(User, event.from_user.id)
-                if stored_user:
-                    stored_user.is_banned = True
-                    await db.commit()
+            from app.services.multigroup import global_ban
+            await global_ban(bot, member.id, source_chat_id=event.chat.id, source='nameban', reason=matched_rule or '')
         except Exception as e:
             await log_error(f'nameban_join:{matched_rule or "unknown"}', e)
         return
-    owner=None
-    inv=getattr(event,'invite_link',None)
-    link=getattr(inv,'invite_link',None) if inv else None
-    if link:
-        async with SessionLocal() as db:
-            res=await db.execute(select(InviteLink).where(InviteLink.link==link,InviteLink.active==True).limit(1))
-            row=res.scalar_one_or_none()
-            if row: owner=row.owner_id
-    if owner and owner==event.from_user.id:
-        owner=None
-    JOIN_CACHE[event.from_user.id]=(owner, datetime.utcnow())
 
-async def _maybe_reward(bot:Bot, owner:int):
-    async with SessionLocal() as db:
-        user=await db.get(User,owner)
-        if not user: return
-        rc=user.reward_counter
-    available=[r for r in await tiers() if rc>=int(r.get('count',0))]
-    if not available: return
-    reward=max(available,key=lambda r:int(r.get('count',0)))
-    async with SessionLocal() as db:
-        user=await db.get(User,owner)
-        if user:
-            user.reward_counter=0
-            await db.commit()
-    label=reward.get('label','Récompense')
-    link=reward.get('link','')
-    msg=f'🎁 PALIER ATTEINT\n\nRécompense débloquée :\n{label}\n\nTon compteur récompense repart à 0.'
-    if link: msg += f'\n\nLien :\n{link}'
-    try: await bot.send_message(owner,msg)
-    except Exception: pass
+    inv = getattr(event, 'invite_link', None)
+    link = getattr(inv, 'invite_link', None) if inv else None
+    if not link:
+        return
 
-async def validate_invites(bot:Bot):
-    now=datetime.utcnow()
-    for uid,(owner,t) in list(JOIN_CACHE.items()):
-        if now-t >= timedelta(minutes=5):
-            if owner:
-                async with SessionLocal() as db:
-                    user=await db.get(User,owner)
-                    if user:
-                        user.total_invites+=1; user.reward_counter+=1; user.weekly_invites+=1
-                        rc=user.reward_counter; total=user.total_invites
-                        await db.commit()
-                        try: await bot.send_message(owner,f'✅ +1 invité validé\n\nProgression récompense : {rc}\nTotal invités : {total}')
-                        except Exception: pass
-                await _maybe_reward(bot,owner)
-            JOIN_CACHE.pop(uid,None)
-
-async def top_text():
     async with SessionLocal() as db:
-        res=await db.execute(select(User).where(User.weekly_invites>=100).order_by(User.weekly_invites.desc()).limit(10))
-        users=res.scalars().all()
-    if not users: return '🏆 TOP INVITEURS\n\nAucune statistique pour le moment.'
-    lines=['🏆 TOP INVITEURS — J-7','']
-    for i,u in enumerate(users,1):
-        name=('@'+u.username[:2]+'****') if u.username else (u.full_name[:2]+'****')
-        lines.append(f'{i}. {name} — {u.weekly_invites} invités')
-    lines.append('\nLe TOP 3 débloque tous les avantages.\nFin du classement dans : 7 jours')
+        owner = (await db.execute(
+            select(InviteOwner).where(InviteOwner.invite_link == link, InviteOwner.active.is_(True)).limit(1)
+        )).scalar_one_or_none()
+        if not owner or owner.owner_id == member.id:
+            return
+        existing = await db.get(InviteCredit, member.id)
+        if existing:
+            # Une personne ne peut donner qu'un seul point globalement, même après leave/rejoin/A→B.
+            return
+        db.add(InviteCredit(
+            invited_user_id=member.id,
+            owner_id=owner.owner_id,
+            group_chat_id=event.chat.id,
+            invite_link=link,
+            status='pending',
+            joined_at=datetime.utcnow(),
+        ))
+        await db.commit()
+
+
+async def validate_invites(bot: Bot):
+    cutoff = datetime.utcnow() - timedelta(minutes=5)
+    async with SessionLocal() as db:
+        pending = list((await db.execute(
+            select(InviteCredit).where(InviteCredit.status == 'pending', InviteCredit.joined_at <= cutoff)
+        )).scalars().all())
+
+    for credit in pending:
+        valid = False
+        reason = ''
+        try:
+            member = await bot.get_chat_member(credit.group_chat_id, credit.invited_user_id)
+            valid = _status_value(member.status) in VALID_MEMBER_STATUSES
+            if not valid:
+                reason = 'membre parti avant validation'
+        except Exception:
+            # On ne valide pas à l'aveugle en cas d'erreur Telegram : prochain tick réessaiera.
+            continue
+
+        if valid:
+            async with SessionLocal() as db:
+                fresh = await db.get(InviteCredit, credit.invited_user_id)
+                if not fresh or fresh.status != 'pending':
+                    continue
+                fresh.status = 'valid'
+                fresh.validated_at = datetime.utcnow()
+                owner = await db.get(InviteOwner, fresh.owner_id)
+                if owner:
+                    owner.score += 1
+                    owner.updated_at = datetime.utcnow()
+                user = await db.get(User, fresh.owner_id)
+                if user:
+                    user.total_invites += 1
+                    user.weekly_invites += 1
+                await db.commit()
+            rank, score = await rank_for(credit.owner_id)
+            try:
+                await bot.send_message(
+                    credit.owner_id,
+                    '🎉 NOUVELLE INVITATION VALIDÉE\n\n'
+                    f'Invitations : {score}\n'
+                    f'Classement actuel : #{rank or "-"}\n\n'
+                    '🏆 Le TOP 3 remporte un accès VIP. Les gagnants seront contactés manuellement.'
+                )
+            except Exception:
+                pass
+        else:
+            async with SessionLocal() as db:
+                fresh = await db.get(InviteCredit, credit.invited_user_id)
+                if fresh and fresh.status == 'pending':
+                    fresh.status = 'rejected'
+                    fresh.reject_reason = reason
+                    await db.commit()
+
+
+async def top_text(limit: int = 10):
+    async with SessionLocal() as db:
+        rows = list((await db.execute(
+            select(InviteOwner, User)
+            .outerjoin(User, User.id == InviteOwner.owner_id)
+            .where(InviteOwner.score > 0)
+            .order_by(InviteOwner.score.desc(), InviteOwner.owner_id.asc())
+            .limit(limit)
+        )).all())
+    if not rows:
+        return '🏆 TOP 10 INVITATIONS\n\nAucune statistique pour le moment.'
+    medals = {1: '🥇', 2: '🥈', 3: '🥉'}
+    lines = ['🏆 TOP 10 INVITATIONS', '']
+    for index, (owner, user) in enumerate(rows, 1):
+        if user and user.username:
+            name = '@' + user.username
+        elif user and user.full_name:
+            name = user.full_name[:24]
+        else:
+            name = 'membre'
+        lines.append(f'{medals.get(index, str(index)+".")} {name} — {owner.score}')
+    lines += ['', '🎁 Le TOP 3 remporte un accès VIP.', 'Les gagnants seront contactés manuellement.']
     return '\n'.join(lines)
+
+
+async def release_link_for_owner(bot: Bot, owner_id: int, reason: str = 'sanction') -> bool:
+    """Révoque le lien personnel d'un propriétaire sans toucher à son score."""
+    async with SessionLocal() as db:
+        owner = await db.get(InviteOwner, owner_id)
+        if not owner or not owner.active or not owner.invite_link or not owner.group_chat_id:
+            return False
+        group_id = int(owner.group_chat_id)
+        link = owner.invite_link
+    try:
+        await bot.revoke_chat_invite_link(group_id, link)
+    except Exception:
+        pass
+    async with SessionLocal() as db:
+        owner = await db.get(InviteOwner, owner_id)
+        if owner:
+            owner.active = False
+            owner.released = True
+            owner.group_chat_id = None
+            owner.invite_link = None
+            owner.updated_at = datetime.utcnow()
+            await db.commit()
+    return True
+
+
+async def release_links_for_group(bot: Bot, group_chat_id: int) -> int:
+    async with SessionLocal() as db:
+        owners = list((await db.execute(
+            select(InviteOwner).where(
+                InviteOwner.group_chat_id == group_chat_id,
+                InviteOwner.active.is_(True),
+                InviteOwner.invite_link.is_not(None),
+            )
+        )).scalars().all())
+    released = 0
+    for owner in owners:
+        if owner.invite_link:
+            try:
+                await bot.revoke_chat_invite_link(group_chat_id, owner.invite_link)
+            except Exception:
+                pass
+        async with SessionLocal() as db:
+            row = await db.get(InviteOwner, owner.owner_id)
+            if row and row.group_chat_id == group_chat_id:
+                row.active = False
+                row.released = True
+                row.group_chat_id = None
+                row.invite_link = None
+                row.updated_at = datetime.utcnow()
+                await db.commit()
+        released += 1
+        try:
+            await bot.send_message(
+                owner.owner_id,
+                '⚠️ Ton groupe d’invitation est indisponible. Ton ancien lien a été libéré.\n\n'
+                f'Ton score ({owner.score}) est conservé. Reclique sur “Obtenir mon lien” lorsqu’un groupe est disponible.'
+            )
+        except Exception:
+            pass
+    return released
+
+
+async def archive_and_reset_competition() -> int:
+    async with SessionLocal() as db:
+        active = (await db.execute(select(InviteCompetition).where(InviteCompetition.active.is_(True)))).scalars().all()
+        now = datetime.utcnow()
+        for comp in active:
+            comp.active = False
+            comp.ended_at = now
+        count = int((await db.execute(select(func.count(InviteOwner.owner_id)).where(InviteOwner.score > 0))).scalar() or 0)
+        await db.execute(update(InviteOwner).values(score=0, updated_at=now))
+        await db.execute(update(User).values(weekly_invites=0))
+        db.add(InviteCompetition(active=True, started_at=now, note='Classement invitations'))
+        await db.commit()
+    await st.set_value('invite_competition_started_at', datetime.utcnow().isoformat(timespec='seconds'))
+    return count
+
 
 async def invite_health_text():
-    return f"🎁 Invitations\n\nDernière publication : {await st.get_value('last_invite_sent_at','jamais')}\nImage configurée : {'oui' if await st.get_value('invite_image_file_id','') else 'non'}\nPaliers : {len(await tiers())}"
+    async with SessionLocal() as db:
+        owners = int((await db.execute(select(func.count(InviteOwner.owner_id)).where(InviteOwner.active.is_(True)))).scalar() or 0)
+        pending = int((await db.execute(select(func.count(InviteCredit.invited_user_id)).where(InviteCredit.status == 'pending'))).scalar() or 0)
+        valid = int((await db.execute(select(func.count(InviteCredit.invited_user_id)).where(InviteCredit.status == 'valid'))).scalar() or 0)
+    return (
+        '🎁 Invitations\n\n'
+        f'Liens actifs : {owners}\n'
+        f'Validations en attente : {pending}\n'
+        f'Invitations validées : {valid}\n'
+        f'Dernière publication : {await st.get_value("last_invite_sent_at", "jamais")}\n\n'
+        'TOP 3 : VIP, contact manuel.'
+    )
 
-async def tiers_text():
-    lines=['🎁 Paliers actuels', '', 'Format édition : 1|Label|Lien GoFile']
-    for r in await tiers(): lines.append(f"{r['count']}|{r['label']}|{r.get('link','')}")
-    return '\n'.join(lines)

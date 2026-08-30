@@ -43,9 +43,13 @@ def supported_broadcast_message(message: Message) -> bool:
 
 
 async def broadcast_to_main_group(bot: Bot, source: Message) -> int:
-    """Copie le message admin tel quel dans le groupe principal."""
+    """Copie le message admin tel quel dans le groupe principal actuellement actif."""
+    from app.services.multigroup import active_group_id
+    chat_id=await active_group_id()
+    if not chat_id:
+        raise RuntimeError('Aucun groupe actif.')
     copied = await bot.copy_message(
-        chat_id=get_settings().main_group_id,
+        chat_id=chat_id,
         from_chat_id=source.chat.id,
         message_id=source.message_id,
     )
