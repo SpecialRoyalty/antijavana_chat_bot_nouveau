@@ -68,7 +68,7 @@ def mod_kb():
 
 def crowd_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='📤 Publier maintenant',callback_data='crowd_send'), InlineKeyboardButton(text='🩺 Vérifier diffusion',callback_data='crowd_health')],
+        [InlineKeyboardButton(text='📤 Publier maintenant',callback_data='crowd_send_menu'), InlineKeyboardButton(text='🩺 Vérifier diffusion',callback_data='crowd_health')],
         [InlineKeyboardButton(text='📋 Gérer campagnes',callback_data='crowd_list'), InlineKeyboardButton(text='➕ Nouvelle campagne',callback_data='crowd_new')],
         [InlineKeyboardButton(text='📝 Modifier texte',callback_data='await:crowd_text'),InlineKeyboardButton(text='🎯 Modifier objectif',callback_data='await:crowd_target')],
         [InlineKeyboardButton(text='🖼 Modifier image',callback_data='await:crowd_image'),InlineKeyboardButton(text='📊 Stats',callback_data='crowd_stats')],
@@ -78,9 +78,17 @@ def crowd_admin_kb():
 def ads_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text='➕ Ajouter pub texte',callback_data='await:ad_text'),InlineKeyboardButton(text='🖼 Ajouter pub image',callback_data='await:ad_image')],
-        [InlineKeyboardButton(text='📤 Publier maintenant',callback_data='ad_send'),InlineKeyboardButton(text='📋 Liste pubs',callback_data='ad_list')],
+        [InlineKeyboardButton(text='📤 Publier maintenant',callback_data='ad_send_menu'),InlineKeyboardButton(text='📋 Liste pubs',callback_data='ad_list')],
         [InlineKeyboardButton(text='🩺 Vérifier diffusion',callback_data='ad_health')],
         [InlineKeyboardButton(text='⬅️ Retour',callback_data='adm_dashboard')]
+    ])
+
+
+def publish_targets_kb(prefix:str, back_callback:str='adm_dashboard'):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='🅰️ Groupe A', callback_data=f'{prefix}:a'), InlineKeyboardButton(text='🅱️ Groupe B', callback_data=f'{prefix}:b')],
+        [InlineKeyboardButton(text='📣 Les 2 groupes', callback_data=f'{prefix}:both')],
+        [InlineKeyboardButton(text='⬅️ Retour', callback_data=back_callback)],
     ])
 
 def vip_kb():
@@ -101,7 +109,7 @@ def admin_validate_kb(kind:str, id:int):
 
 def rules_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='📤 Publier règles maintenant', callback_data='rules_send')],
+        [InlineKeyboardButton(text='📤 Publier règles maintenant', callback_data='rules_send_menu')],
         [InlineKeyboardButton(text='🩺 Vérifier diffusion', callback_data='rules_health')],
         [InlineKeyboardButton(text='✍️ Modifier texte', callback_data='await:rules_text')],
         [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
@@ -116,7 +124,7 @@ def hashban_kb():
 
 def vip_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='📤 Publier VIP maintenant', callback_data='vip_send')],
+        [InlineKeyboardButton(text='📤 Publier VIP maintenant', callback_data='vip_send_menu')],
         [InlineKeyboardButton(text='📝 Modifier texte principal', callback_data='await:vip_text'), InlineKeyboardButton(text='🖼 Modifier image principale', callback_data='await:vip_image')],
         [InlineKeyboardButton(text='🎟 Texte Pass soirée', callback_data='await:vip_offer_text:soiree'), InlineKeyboardButton(text='💶 Prix soirée', callback_data='await:vip_price:soiree')],
         [InlineKeyboardButton(text='📦 Texte Pass total', callback_data='await:vip_offer_text:total'), InlineKeyboardButton(text='💶 Prix total', callback_data='await:vip_price:total')],
@@ -142,7 +150,7 @@ def confirm_kb(action:str):
 
 def invite_admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text='📤 Publier maintenant', callback_data='invite_send'), InlineKeyboardButton(text='🩺 Vérifier invitations', callback_data='invite_health')],
+        [InlineKeyboardButton(text='📤 Publier maintenant', callback_data='invite_send_menu'), InlineKeyboardButton(text='🩺 Vérifier invitations', callback_data='invite_health')],
         [InlineKeyboardButton(text='📝 Modifier texte', callback_data='await:invite_text'), InlineKeyboardButton(text='🖼 Modifier image', callback_data='await:invite_image')],
         [InlineKeyboardButton(text='🏆 Voir TOP 10', callback_data='top_health')],
         [InlineKeyboardButton(text='🗃 Archiver + remettre à zéro', callback_data='invite_reset_confirm')],
