@@ -15,6 +15,7 @@ from app.services import settings as st
 from app.services.settings import init_defaults
 from app.services.state import cleanup_known_status_duplicates, ensure_status_message
 from app.services.telegram_client import ResilientBot
+from app.services.multigroup import bootstrap_managed_chats, active_group_id, main_group_ids, sync_redirections
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,7 @@ async def main() -> None:
     try:
         await init_db()
         await init_defaults()
+        await bootstrap_managed_chats()
 
         me = await wait_for_telegram(bot)
         await st.set_value("bot_id", str(me.id))
@@ -92,7 +94,10 @@ async def main() -> None:
         dispatcher.include_router(group.router)
 
         scheduler = start_scheduler(bot)
-        await initialize_status(bot, settings.main_group_id)
+        active = await active_group_id()
+        if active:
+            await initialize_status(bot, active)
+        await sync_redirections(bot)
 
         logger.info("Démarrage du polling Telegram.")
         await dispatcher.start_polling(

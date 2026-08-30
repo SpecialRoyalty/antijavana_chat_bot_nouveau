@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
 from aiogram import Bot
+
 from app.config import get_settings
 from app.services import settings as st
 from app.services.state import ensure_status_message, vote_count
@@ -10,13 +13,19 @@ from app.services.crowdfunding import send_crowd_ad
 from app.services.ads import send_random_ad
 from app.services.invites import validate_invites, top_text, send_invite_ad
 from app.services.freepass import send_due_free_pass_links
+from app.services.multigroup import active_group_id, health_monitor_tick, selected_group_role
+from app.services.justice import justice_already_done, process_pending_justice_removals
 from app.utils.time import in_slot, mid_time, now_tz
 
+
 async def tick(bot:Bot):
-    s=get_settings(); chat=s.main_group_id
+    chat=await active_group_id()
+    if not chat:
+        return
     await ensure_status_message(bot,chat,recreate_on_change=True)
     if not await st.auto_enabled():
         return
+    s=get_settings()
     ins=in_slot(await st.time_slot(),s.timezone)
     open_=await st.is_open()
     goal=await st.vote_goal(); votes=await vote_count(chat)
@@ -24,63 +33,96 @@ async def tick(bot:Bot):
         await set_group_open(bot,True,'auto')
     if not ins and open_:
         await set_group_open(bot,False,'auto')
+
+
 async def run_justice_now(bot:Bot):
-    if not await st.is_open(): return
+    if not await st.is_open():
+        return
     from app.services.justice import execute_justice
     await execute_justice(bot, manual=False)
 
+
 async def justice_tick(bot:Bot):
-    if not await st.is_open(): return
+    if not await st.is_open() or not await active_group_id():
+        return
+    if await justice_already_done():
+        return
     s=get_settings(); mt=mid_time(await st.time_slot(),s.timezone); n=now_tz(s.timezone)
-    done=await st.get_value('justice_done_'+n.strftime('%Y%m%d'),'false')
-    if done=='true': return
     if abs((n-mt).total_seconds())<70:
-        await st.set_value('justice_done_'+n.strftime('%Y%m%d'),'true')
+        # execute_justice pose lui-même le flag seulement au vrai démarrage.
         await run_justice_now(bot)
+
+
 async def rules_tick(bot:Bot, force:bool=False):
-    if not force and not await st.is_open(): return
-    s=get_settings(); old=await st.get_value('rules_message_id','')
+    if not force and not await st.is_open():
+        return
+    chat=await active_group_id()
+    if not chat:
+        return
+    old_chat=int(await st.get_value('rules_chat_id','0') or '0')
+    old=await st.get_value('rules_message_id','')
     try:
-        if old: await bot.delete_message(s.main_group_id,int(old))
-    except Exception: pass
-    m=await bot.send_message(s.main_group_id, await st.get_value('rules_text','Règles'))
+        if old and old_chat:
+            await bot.delete_message(old_chat,int(old))
+    except Exception:
+        pass
+    m=await bot.send_message(chat, await st.get_value('rules_text','Règles'))
     await st.set_value('rules_message_id',str(m.message_id))
-    from datetime import datetime
+    await st.set_value('rules_chat_id',str(chat))
     await st.set_value('last_rules_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
-async def top_tick(bot:Bot):
-    if not await st.is_open(): return
-    s=get_settings(); txt=await top_text()
-    if 'Aucune statistique' in txt: return
-    await bot.send_message(s.main_group_id, txt)
-    from datetime import datetime
+    return m.message_id
+
+
+async def top_after_justice_tick(bot:Bot, force:bool=False):
+    if not force and (not await st.is_open() or not await active_group_id()):
+        return None
+    if not force:
+        if not await justice_already_done():
+            return None
+        if await st.get_value('justice_running','false') == 'true':
+            return None
+    sid=await st.get_value('active_session_id','0')
+    if not force and sid != '0' and await st.get_value('invite_top_last_session','') == sid:
+        return None
+    txt=await top_text()
+    if 'Aucune statistique' in txt:
+        return None
+    chat=await active_group_id()
+    if not chat:
+        return None
+    m=await bot.send_message(chat,txt)
     await st.set_value('last_top_sent_at', datetime.utcnow().isoformat(timespec='seconds'))
+    if sid != '0':
+        await st.set_value('invite_top_last_session',sid)
+    return m.message_id
+
+
+async def infrastructure_tick(bot: Bot):
+    await health_monitor_tick(bot)
+    await process_pending_justice_removals(bot)
+
+
 def start_scheduler(bot:Bot):
     sch=AsyncIOScheduler(
         timezone=get_settings().timezone,
-        job_defaults={
-            'coalesce': True,
-            'max_instances': 1,
-            'misfire_grace_time': 120,
-        },
+        job_defaults={'coalesce':True,'max_instances':1,'misfire_grace_time':120},
     )
-
-    # Les jobs à intervalle sont volontairement décalés. Sans ce décalage,
-    # APScheduler les lance tous à la même seconde après le démarrage, ce qui
-    # provoque un pic d'appels vers Telegram.
     now=datetime.now(sch.timezone)
-    sch.add_job(tick,'interval',minutes=1,args=[bot], id='tick', next_run_time=now+timedelta(seconds=5))
-    sch.add_job(justice_tick,'interval',minutes=1,args=[bot], id='justice', next_run_time=now+timedelta(seconds=20))
-    sch.add_job(validate_invites,'interval',minutes=1,args=[bot], id='invite_validate', next_run_time=now+timedelta(seconds=35))
-    sch.add_job(security_close_if_manual,'interval',minutes=5,args=[bot], id='security_close', next_run_time=now+timedelta(seconds=50))
+    # Jobs décalés pour éviter un burst API Telegram au démarrage.
+    sch.add_job(tick,'interval',minutes=1,args=[bot],id='tick',next_run_time=now+timedelta(seconds=5))
+    sch.add_job(justice_tick,'interval',minutes=1,args=[bot],id='justice',next_run_time=now+timedelta(seconds=20))
+    sch.add_job(validate_invites,'interval',minutes=1,args=[bot],id='invite_validate',next_run_time=now+timedelta(seconds=35))
+    sch.add_job(top_after_justice_tick,'interval',minutes=1,args=[bot],id='top_after_justice',next_run_time=now+timedelta(seconds=50))
+    sch.add_job(infrastructure_tick,'interval',minutes=2,args=[bot],id='infra_health',next_run_time=now+timedelta(seconds=65))
+    sch.add_job(security_close_if_manual,'interval',minutes=5,args=[bot],id='security_close',next_run_time=now+timedelta(seconds=80))
 
-    sch.add_job(rules_tick,'interval',minutes=30,args=[bot], id='rules', next_run_time=now+timedelta(seconds=65))
-    sch.add_job(send_vip_ad,'cron',hour='22,0',minute='50,10',second=5,args=[bot], id='vip_ads')
-    sch.add_job(send_crowd_ad,'cron',hour='22,0',minute='55,15',second=15,args=[bot], id='crowd_ads')
-    sch.add_job(send_random_ad,'cron',hour='22,0',minute='45,5',second=25,args=[bot], id='random_ads')
-    sch.add_job(top_tick,'cron',hour='0',minute='40',second=35,args=[bot], id='top')
-    sch.add_job(send_invite_ad,'cron',hour='23',minute='25',second=45,args=[bot], id='invite_ad')
-    sch.add_job(send_due_pass_soiree_links,'cron',hour='23',minute='0',second=5,args=[bot], id='pass_soiree_release')
-    sch.add_job(send_due_free_pass_links,'cron',hour='23',minute='0',second=25,args=[bot], id='free_pass_release')
-    sch.add_job(expire_pass_soiree,'cron',hour='5',minute='0',second=10,args=[bot], id='expire_pass')
+    sch.add_job(rules_tick,'interval',minutes=30,args=[bot],id='rules',next_run_time=now+timedelta(seconds=95))
+    sch.add_job(send_vip_ad,'cron',hour='22,0',minute='50,10',second=5,args=[bot],id='vip_ads')
+    sch.add_job(send_crowd_ad,'cron',hour='22,0',minute='55,15',second=15,args=[bot],id='crowd_ads')
+    sch.add_job(send_random_ad,'cron',hour='22,0',minute='45,5',second=25,args=[bot],id='random_ads')
+    sch.add_job(send_invite_ad,'cron',hour='23',minute='25',second=45,args=[bot],id='invite_ad')
+    sch.add_job(send_due_pass_soiree_links,'cron',hour='23',minute='0',second=5,args=[bot],id='pass_soiree_release')
+    sch.add_job(send_due_free_pass_links,'cron',hour='23',minute='0',second=25,args=[bot],id='free_pass_release')
+    sch.add_job(expire_pass_soiree,'cron',hour='5',minute='0',second=10,args=[bot],id='expire_pass')
     sch.start()
     return sch
