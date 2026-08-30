@@ -26,6 +26,11 @@ async def dm_or_deeplink(cb:CallbackQuery, bot:Bot, offer:str):
 
 @router.callback_query(F.data=='vote_open')
 async def vote(cb:CallbackQuery,bot:Bot):
+    from app.services.multigroup import active_group_id
+    active=await active_group_id()
+    if not active or cb.message.chat.id != active:
+        await cb.answer('Ce groupe n’est pas actif ce soir.', show_alert=True)
+        return
     added=await add_vote(cb.message.chat.id,cb.from_user.id)
     goal=await st.vote_goal(); votes=await vote_count(cb.message.chat.id)
     if votes>=goal and in_slot(await st.time_slot(), get_settings().timezone) and not await st.is_open():
@@ -77,14 +82,20 @@ async def crowd(cb:CallbackQuery, bot:Bot):
         else: await cb.answer('Démarre le bot en privé puis reclique.', show_alert=True)
 
 
-@router.callback_query(F.data=='invite_private')
+@router.callback_query(F.data.startswith('invite_private'))
 async def invite_private(cb:CallbackQuery, bot:Bot):
+    requested=None
+    if ':' in cb.data:
+        try: requested=int(cb.data.split(':',1)[1])
+        except Exception: requested=None
     try:
-        await send_invite_private(bot, cb.from_user.id)
+        await send_invite_private(bot, cb.from_user.id, requested)
         await cb.answer('Lien envoyé en privé ✅')
     except (TelegramForbiddenError, TelegramBadRequest):
         username=get_settings().public_bot_username.strip().lstrip('@')
-        if username: await cb.answer(url=f'https://t.me/{username}?start=invite')
+        if username:
+            suffix=f'invite_{requested}' if requested else 'invite'
+            await cb.answer(url=f'https://t.me/{username}?start={suffix}')
         else: await cb.answer('Démarre le bot en privé puis reclique.', show_alert=True)
 
 

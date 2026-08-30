@@ -10,7 +10,7 @@ from app.services.state import ensure_status_message, log_error
 from app.services.health import health_text
 from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private, handle_vip_proof
 from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private, campaigns_kb, campaign_detail, toggle_campaign, delete_campaign, handle_crowd_text, handle_crowd_proof, send_campaign_by_id
-from app.services.invites import top_text, send_invite_ad, invite_health_text, tiers_text, set_tiers_from_text, send_invite_private
+from app.services.invites import top_text, send_invite_ad, invite_health_text, send_invite_private, archive_and_reset_competition
 from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad, set_ad_text, set_ad_image, send_ad_by_id
 from app.db.session import SessionLocal
 from app.db.models import WordRule
@@ -31,6 +31,10 @@ from app.services.broadcast import register_private_start, supported_broadcast_m
 from app.services.anti_fast_join import health_text as fast_join_health_text
 from app.services.anti_repost import health_text as anti_repost_health_text
 from app.services.moderation import invalidate_word_cache
+from app.services.multigroup import (
+    active_group_id, active_group_keyboard, active_group_or_none_text, assign_chat_role,
+    infra_keyboard, infrastructure_report, managed_chats_text, select_active_group,
+)
 router=Router()
 
 def is_admin(uid:int): return uid in get_settings().admin_ids
@@ -90,13 +94,14 @@ async def anti_repost_settings_text():
 
 Statut : {'ON' if is_enabled else 'OFF'}
 
-Quand cette option est active, un média déjà envoyé dans le groupe principal ne peut pas être reposté.
+Quand cette option est active, un média déjà envoyé dans le Groupe A OU le Groupe B ne peut plus être reposté dans aucun des deux.
 
-Détection exacte :
+Détection :
 • file_unique_id Telegram
 • SHA256 du fichier
+• fingerprint perceptuel vidéo quand nécessaire
 
-En cas de repost : média/album supprimé, avertissement temporaire, aucune copie VIP.
+En cas de repost : média/album supprimé, avertissement temporaire, aucune copie VIP. Le repost ordinaire ne déclenche pas de ban.
 Aucun ban automatique. Admins et trusted ne sont pas concernés.'''
 
 
@@ -125,8 +130,12 @@ async def start(msg:Message, bot:Bot):
         if arg=='crowd':
             await start_crowd_private(bot, msg.from_user.id)
             return
-        if arg=='invite':
-            await send_invite_private(bot, msg.from_user.id)
+        if arg=='invite' or arg.startswith('invite_'):
+            requested=None
+            if arg.startswith('invite_'):
+                try: requested=int(arg.split('_',1)[1])
+                except Exception: requested=None
+            await send_invite_private(bot, msg.from_user.id, requested)
             return
         if arg=='freepass':
             username = msg.from_user.username or msg.from_user.full_name or ''
@@ -147,11 +156,19 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): await cb.answer('Accès refusé',show_alert=True); return
     d=cb.data
     if d=='adm_dashboard': await cb.message.answer('📊 Panel admin',reply_markup=admin_kb())
-    elif d=='adm_health': await cb.message.answer(await health_text(bot))
-    elif d=='adm_open': await set_group_open(bot,True,'manual'); await cb.message.answer('🟢 Groupe ouvert manuellement.')
-    elif d=='adm_close': await set_group_open(bot,False,'manual'); await cb.message.answer('🔴 Groupe fermé manuellement.')
+    elif d=='adm_health': await cb.message.answer(await health_text(bot), reply_markup=infra_keyboard())
+    elif d=='adm_active_group': await cb.message.answer(f'🌙 Groupe actif ce soir\n\nActuellement : {await active_group_or_none_text()}\n\nUn seul groupe principal peut être sélectionné.', reply_markup=active_group_keyboard())
+    elif d=='adm_groups': await cb.message.answer(await managed_chats_text(), reply_markup=infra_keyboard())
+    elif d=='adm_infra': await cb.message.answer('🧪 Tests infrastructure\n\nVérifie les deux groupes principaux et les VIP communs. Le test réel VIP envoie puis supprime un message temporaire.', reply_markup=infra_keyboard())
+    elif d=='adm_open':
+        ok=await set_group_open(bot,True,'manual')
+        await cb.message.answer('🟢 Groupe actif ouvert manuellement.' if ok else '❌ Aucun groupe actif sélectionné/accessible.')
+    elif d=='adm_close':
+        await set_group_open(bot,False,'manual')
+        await cb.message.answer('🔴 Session fermée. Les groupes principaux sont fermés.')
     elif d=='adm_auto':
-        cur=await st.auto_enabled(); await st.set_value('auto_enabled','false' if cur else 'true'); await ensure_status_message(bot,get_settings().main_group_id); await cb.message.answer(f'⏰ Horaire auto : {"OFF" if cur else "ON"}',reply_markup=admin_kb())
+        cur=await st.auto_enabled(); await st.set_value('auto_enabled','false' if cur else 'true'); chat=await active_group_id();
+        if chat: await ensure_status_message(bot,chat); await cb.message.answer(f'⏰ Horaire auto : {"OFF" if cur else "ON"}',reply_markup=admin_kb())
     elif d=='adm_goal': await cb.message.answer(f'📦 Objectif actuel : {await st.vote_goal()}\nChoisis un objectif ou personnalisé.',reply_markup=goal_kb())
     elif d=='adm_justice': await cb.message.answer('⚖️ Justice populaire\n\nAutomatique : 50% de la session.\nTest manuel disponible avec prévisualisation.',reply_markup=justice_kb())
     elif d=='adm_cleanup': await cb.message.answer('🧹 Nettoyage\n\nSi les médias ne se suppriment pas, vérifie que le bot est admin avec droit de suppression.',reply_markup=cleanup_kb())
@@ -160,7 +177,7 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     elif d=='adm_freepass': await cb.message.answer(await freepass_admin_text(), reply_markup=await free_pass_admin_kb_async())
     elif d=='adm_crowd': await cb.message.answer('💰 Crowdfunding',reply_markup=crowd_admin_kb())
     elif d=='adm_ads': await cb.message.answer('📢 Publicités',reply_markup=ads_admin_kb())
-    elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nTexte + image + bouton Recevoir vidéos. Validation après 5 min, paliers GoFile, compteurs total/récompense.',reply_markup=invite_admin_kb())
+    elif d=='adm_invites': await cb.message.answer('🎁 Invitations\n\nUn lien actif par personne. Validation après 5 min. Classement global A+B. TOP 10 après la justice ; TOP 3 = VIP, contact manuel.',reply_markup=invite_admin_kb())
     elif d=='adm_top': await cb.message.answer(await top_text(), reply_markup=top_admin_kb())
     elif d=='adm_mod': await cb.message.answer('🛡️ Modération\nAjoute les mots via boutons, sans commandes.',reply_markup=mod_kb())
     elif d=='adm_rules': await cb.message.answer('📜 Règles\n\nTu peux publier maintenant ou modifier le texte.',reply_markup=rules_admin_kb())
@@ -172,18 +189,19 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
     elif d=='adm_hashban': await cb.message.answer('🚫 Hash ban\n\nEnvoie un média en privé pour le blacklister. Le bot affichera ensuite le file_unique_id, le SHA256 et leur statut.\n\nPour un album, chaque élément reçu est contrôlé.',reply_markup=hashban_kb())
     elif d=='adm_broadcast_group':
         await set_admin_state(cb.from_user.id, 'broadcast_group')
-        await cb.message.answer('📢 Broadcast groupe principal\n\nEnvoie maintenant :\n• un texte\n• une photo\n• une photo avec légende\n\nLe message sera publié immédiatement dans le groupe principal.')
+        await cb.message.answer('📢 Broadcast groupe ACTIF\n\nEnvoie maintenant :\n• un texte\n• une photo\n• une photo avec légende\n\nLe message sera publié immédiatement dans le groupe actif.')
     elif d=='adm_broadcast_private':
         count=await private_subscriber_count()
         await set_admin_state(cb.from_user.id, 'broadcast_private')
         await cb.message.answer(f'📨 Broadcast privé\n\nDestinataires actifs : {count}\n\nEnvoie maintenant :\n• un texte\n• une photo\n• une photo avec légende\n\nLe message sera envoyé immédiatement aux personnes ayant fait /start en privé.')
-    elif d=='adm_settings': await cb.message.answer('⚙️ Paramètres\nHoraires + limite justice populaire + anti publication immédiate.',reply_markup=settings_kb())
+    elif d=='adm_settings': await cb.message.answer('⚙️ Paramètres\nHoraires + justice + anti publication immédiate + anti-repost global A+B.',reply_markup=settings_kb())
     await cb.answer()
 
 @router.callback_query(F.data.startswith('goal_set:'))
 async def cb_goal_set(cb:CallbackQuery, bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
-    n=int(cb.data.split(':')[1]); await st.set_value('vote_goal',str(n)); await ensure_status_message(bot,get_settings().main_group_id)
+    n=int(cb.data.split(':')[1]); await st.set_value('vote_goal',str(n)); chat=await active_group_id();
+    if chat: await ensure_status_message(bot,chat)
     await cb.message.answer(f'✅ Objectif défini : {n}',reply_markup=admin_kb()); await cb.answer()
 
 @router.callback_query(F.data.startswith('slot_set:'))
@@ -191,7 +209,8 @@ async def cb_slot(cb:CallbackQuery, bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     if await st.is_open(): await cb.answer('Impossible pendant session active',show_alert=True); return
     slot=cb.data.split(':',1)[1]
-    await st.set_value('time_slot',slot); await ensure_status_message(bot,get_settings().main_group_id)
+    await st.set_value('time_slot',slot); chat=await active_group_id();
+    if chat: await ensure_status_message(bot,chat)
     await cb.message.answer(f'✅ Horaire défini : {slot}',reply_markup=admin_kb()); await cb.answer()
 
 @router.callback_query(F.data.startswith('await:'))
@@ -223,7 +242,6 @@ async def await_input(cb:CallbackQuery):
         'hash_ban_media':'Envoie le média à bannir par hash. Le bot l’ajoutera en amont.',
         'invite_text':'Envoie le texte du message invitations.',
         'invite_image':'Envoie l’image du message invitations.',
-        'invite_tiers':'Envoie les paliers, une ligne par palier : 1|Label|Lien GoFile',
         'freepass_places':'Envoie le nombre de places gratuites.',
         'freepass_cooldown':'Envoie le cooldown en jours.',
         'freepass_media':'Envoie le nombre minimum de médias requis.',
@@ -370,8 +388,8 @@ async def cb_mod_lists(cb:CallbackQuery):
 async def cb_rules_send(cb:CallbackQuery, bot:Bot):
     if cb.from_user and is_admin(cb.from_user.id):
         from app.scheduler import rules_tick
-        await rules_tick(bot, force=True)
-        await cb.message.answer('📜 Règles publiées maintenant.')
+        mid=await rules_tick(bot, force=True)
+        await cb.message.answer('📜 Règles publiées maintenant.' if mid else '🌑 Aucun groupe actif : rien publié.')
         await cb.answer()
 
 @router.callback_query(F.data=='rules_health')
@@ -388,7 +406,11 @@ async def cb_top_send(cb:CallbackQuery, bot:Bot):
         if 'Aucune statistique' in txt:
             await cb.message.answer('🏆 Top inviteurs vide. Rien publié dans le groupe.')
         else:
-            m=await bot.send_message(get_settings().main_group_id, txt)
+            chat=await active_group_id()
+            if not chat:
+                await cb.message.answer('🌑 Aucun groupe actif.')
+                await cb.answer(); return
+            m=await bot.send_message(chat, txt)
             await st.set_value('last_top_sent_at', __import__('datetime').datetime.utcnow().isoformat(timespec='seconds'))
             await cb.message.answer('🏆 Classement publié maintenant.')
         await cb.answer()
@@ -517,7 +539,10 @@ async def admin_text_state(msg:Message, bot:Bot):
         return
     if state=='goal':
         n=int(''.join(x for x in (msg.text or '') if x.isdigit()) or '0')
-        if n>0: await st.set_value('vote_goal',str(n)); await ensure_status_message(bot,get_settings().main_group_id); await msg.answer(f'✅ Objectif défini : {n}',reply_markup=admin_kb())
+        if n>0:
+            await st.set_value('vote_goal',str(n)); chat=await active_group_id();
+            if chat: await ensure_status_message(bot,chat)
+            await msg.answer(f'✅ Objectif défini : {n}',reply_markup=admin_kb())
     elif state in ['forbidden','banword','nameban']:
         kind={'forbidden':'forbidden','banword':'ban','nameban':'nameban'}[state]
         word=(msg.text or '').strip().lower()
@@ -583,9 +608,6 @@ async def admin_text_state(msg:Message, bot:Bot):
             await msg.answer('✅ Image invitations sauvegardée.', reply_markup=invite_admin_kb())
         else:
             await msg.answer('Envoie une image.') ; return
-    elif state=='invite_tiers':
-        ok=await set_tiers_from_text(msg.text or '')
-        await msg.answer('✅ Paliers sauvegardés.' if ok else 'Format invalide. Exemple : 1|1 vidéo|https://gofile...', reply_markup=invite_admin_kb())
     elif state=='freepass_places':
         if await freepass_is_locked() or not freepass_window_open():
             await msg.answer('🔒 Campagne verrouillée. Modification impossible après publication ou hors fenêtre 05h-23h.', reply_markup=await free_pass_admin_kb_async()); await clear_admin_state(msg.from_user.id); return
@@ -816,12 +838,6 @@ async def cb_invite_health(cb:CallbackQuery):
         await cb.message.answer(await invite_health_text())
         await cb.answer()
 
-@router.callback_query(F.data=='invite_tiers')
-async def cb_invite_tiers(cb:CallbackQuery):
-    if cb.from_user and is_admin(cb.from_user.id):
-        await cb.message.answer(await tiers_text(), reply_markup=invite_admin_kb())
-        await cb.answer()
-
 @router.callback_query(F.data.startswith('validate:') | F.data.startswith('reject:'))
 async def validate(cb:CallbackQuery,bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
@@ -829,3 +845,77 @@ async def validate(cb:CallbackQuery,bot:Bot):
     if kind=='vip': await validate_vip(bot,oid,ok)
     if kind=='crowd': await validate_crowd(bot,oid,ok)
     await cb.message.answer('Action exécutée.'); await cb.answer()
+
+
+@router.callback_query(F.data.startswith('chat_role:'))
+async def cb_chat_role(cb: CallbackQuery, bot: Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id):
+        await cb.answer('Accès refusé', show_alert=True)
+        return
+    try:
+        _prefix, raw_chat, role = cb.data.split(':', 2)
+        chat_id = int(raw_chat)
+    except Exception:
+        await cb.answer('Données invalides', show_alert=True)
+        return
+    ok = await assign_chat_role(chat_id, role, cb.from_user.id, bot)
+    await cb.message.answer(
+        ('✅ Chat validé.\n\n' if ok else '❌ Validation impossible.\n\n') + await managed_chats_text(),
+        reply_markup=infra_keyboard(),
+    )
+    await cb.answer('Enregistré' if ok else 'Erreur', show_alert=not ok)
+
+
+@router.callback_query(F.data.startswith('active_group:'))
+async def cb_active_group(cb: CallbackQuery, bot: Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id):
+        await cb.answer('Accès refusé', show_alert=True)
+        return
+    role = cb.data.split(':', 1)[1]
+    ok, text = await select_active_group(bot, role)
+    if ok and role in ('group_a', 'group_b') and await st.is_open():
+        # En failover, la grâce/Pass gratuit reste la même mais son message public est déplacé.
+        try:
+            from app.services.freepass import relocate_free_pass_message
+            await relocate_free_pass_message(bot)
+        except Exception:
+            pass
+    await cb.message.answer(text + '\n\nActuellement : ' + await active_group_or_none_text(), reply_markup=active_group_keyboard())
+    await cb.answer('OK' if ok else 'Impossible', show_alert=not ok)
+
+
+@router.callback_query(F.data=='infra_test')
+async def cb_infra_test(cb: CallbackQuery, bot: Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id):
+        return
+    await cb.answer('Test en cours…')
+    await cb.message.answer(await infrastructure_report(bot, real_vip_test=False), reply_markup=infra_keyboard())
+
+
+@router.callback_query(F.data=='infra_vip_real')
+async def cb_infra_vip_real(cb: CallbackQuery, bot: Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id):
+        return
+    await cb.answer('Test VIP en cours…')
+    await cb.message.answer(await infrastructure_report(bot, real_vip_test=True), reply_markup=infra_keyboard())
+
+
+@router.callback_query(F.data=='invite_reset_confirm')
+async def cb_invite_reset_confirm(cb: CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id):
+        return
+    kb=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text='✅ Archiver et remettre à zéro', callback_data='invite_reset_execute')],
+        [InlineKeyboardButton(text='❌ Annuler', callback_data='adm_invites')],
+    ])
+    await cb.message.answer('🗃 Archiver le classement actuel et remettre tous les scores de compétition à zéro ?\n\nLes compteurs historiques total_invites restent conservés.', reply_markup=kb)
+    await cb.answer()
+
+
+@router.callback_query(F.data=='invite_reset_execute')
+async def cb_invite_reset_execute(cb: CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id):
+        return
+    n=await archive_and_reset_competition()
+    await cb.message.answer(f'✅ Classement archivé.\nParticipants remis à zéro : {n}', reply_markup=invite_admin_kb())
+    await cb.answer()
