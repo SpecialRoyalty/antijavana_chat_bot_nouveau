@@ -8,7 +8,7 @@ from app.services import settings as st
 from app.services.session_ops import set_group_open, cleanup_session, count_known_bans_and_restrictions, presidential_pardon, ministerial_pardon
 from app.services.state import ensure_status_message, log_error
 from app.services.health import health_text
-from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private, handle_vip_proof
+from app.services.vip import send_vip_ad, validate_vip, vip_health_text, send_vip_private, handle_vip_proof, vip_link_test_report
 from app.services.crowdfunding import send_crowd_ad, validate_crowd, set_campaign_text, set_campaign_target, set_campaign_image, stats_text, crowd_health_text, create_campaign, campaigns_text, set_active_campaign, start_crowd_private, campaigns_kb, campaign_detail, toggle_campaign, delete_campaign, handle_crowd_text, handle_crowd_proof, send_campaign_by_id
 from app.services.invites import top_text, send_invite_ad, invite_health_text, send_invite_private, archive_and_reset_competition
 from app.services.ads import add_ad, send_random_ad, list_ads_text, ads_health_text, ads_list_kb, ad_detail, toggle_ad, delete_ad, set_ad_text, set_ad_image, send_ad_by_id
@@ -27,7 +27,7 @@ from app.services.hashban import (
     split_telegram_text,
 )
 from app.services.freepass import free_pass_admin_kb, free_pass_admin_kb_async, admin_text as freepass_admin_text, publish_free_pass, beneficiaries_text as freepass_beneficiaries_text, reset_current_session as freepass_reset_current, reserve_free_pass, refresh_free_pass_message, is_locked as freepass_is_locked, in_admin_config_window as freepass_window_open, delete_free_pass_campaign
-from app.services.broadcast import register_private_start, supported_broadcast_message, broadcast_to_main_group, broadcast_to_private_starters, private_subscriber_count
+from app.services.broadcast import register_private_start, supported_broadcast_message, broadcast_to_main_group, broadcast_to_private_starters, private_subscriber_count, broadcast_to_valid_pass_total, broadcast_to_pass_soiree_without_total, broadcast_to_valid_vip_javana
 from app.services.anti_fast_join import health_text as fast_join_health_text
 from app.services.anti_repost import health_text as anti_repost_health_text
 from app.services.moderation import invalidate_word_cache
@@ -202,6 +202,15 @@ async def admin_cb(cb:CallbackQuery, bot:Bot):
         count=await private_subscriber_count()
         await set_admin_state(cb.from_user.id, 'broadcast_private')
         await cb.message.answer(f'📨 Broadcast privé\n\nDestinataires actifs : {count}\n\nEnvoie maintenant :\n• un texte\n• une photo\n• une photo avec légende\n\nLe message sera envoyé immédiatement aux personnes ayant fait /start en privé.')
+    elif d=='adm_broadcast_vip_total':
+        await set_admin_state(cb.from_user.id, 'broadcast_vip_total')
+        await cb.message.answer('📦 Broadcast Pass Total\n\nEnvoie un texte, une photo, ou une photo avec légende.\n\nDestinataires : tous les utilisateurs ayant un Pass Total actif.')
+    elif d=='adm_broadcast_vip_soiree':
+        await set_admin_state(cb.from_user.id, 'broadcast_vip_soiree')
+        await cb.message.answer('🎟 Broadcast Pass soirée\n\nEnvoie un texte, une photo, ou une photo avec légende.\n\nDestinataires : personnes ayant eu un Pass soirée, sauf celles qui possèdent actuellement un Pass Total actif.')
+    elif d=='adm_broadcast_vip_javana':
+        await set_admin_state(cb.from_user.id, 'broadcast_vip_javana')
+        await cb.message.answer('💎 Broadcast VIP JAVANA\n\nEnvoie un texte, une photo, ou une photo avec légende.\n\nDestinataires : tous les utilisateurs ayant actuellement un accès VIP JAVANA actif.')
     elif d=='adm_settings': await cb.message.answer('⚙️ Paramètres\nHoraires + justice + anti publication immédiate + anti-repost global A+B.',reply_markup=settings_kb())
     await cb.answer()
 
@@ -283,6 +292,22 @@ async def cb_vip_send_target(cb:CallbackQuery, bot:Bot):
 @router.callback_query(F.data=='vip_health')
 async def cb_vip_health(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id): await cb.message.answer(await vip_health_text()); await cb.answer()
+
+@router.callback_query(F.data=='vip_repost_toggle')
+async def cb_vip_repost_toggle(cb:CallbackQuery):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    current=(await st.get_value('vip_repost_enabled','true'))=='true'
+    enabled=not current
+    await st.set_value('vip_repost_enabled','true' if enabled else 'false')
+    await cb.message.answer('🔁 Repost médias vers les 3 VIP : ' + ('✅ ON' if enabled else '⛔ OFF'), reply_markup=vip_admin_kb())
+    await cb.answer()
+
+@router.callback_query(F.data=='vip_link_test')
+async def cb_vip_link_test(cb:CallbackQuery, bot:Bot):
+    if not cb.from_user or not is_admin(cb.from_user.id): return
+    await cb.message.answer('⏳ Test réel des liens VIP en cours…')
+    await cb.message.answer(await vip_link_test_report(bot, notify=False), reply_markup=vip_admin_kb())
+    await cb.answer()
 @router.callback_query(F.data=='crowd_send_menu')
 async def cb_crowd_send_menu(cb:CallbackQuery):
     if cb.from_user and is_admin(cb.from_user.id):
@@ -565,7 +590,7 @@ async def admin_text_state(msg:Message, bot:Bot):
     state=await get_admin_state(msg.from_user.id)
     if not state:
         return
-    if state in ('broadcast_group', 'broadcast_private'):
+    if state in ('broadcast_group', 'broadcast_private', 'broadcast_vip_total', 'broadcast_vip_soiree', 'broadcast_vip_javana'):
         if not supported_broadcast_message(msg):
             await msg.answer('Format refusé. Envoie uniquement un texte, une photo, ou une photo avec légende.')
             return
@@ -578,10 +603,24 @@ async def admin_text_state(msg:Message, bot:Bot):
                 await log_error('broadcast_group', exc)
                 await msg.answer(f'❌ Échec du broadcast groupe : {type(exc).__name__}', reply_markup=admin_kb())
             return
-        await msg.answer('⏳ Broadcast privé en cours…')
-        stats=await broadcast_to_private_starters(bot, msg)
+        if state=='broadcast_vip_total':
+            await msg.answer('⏳ Broadcast Pass Total en cours…')
+            stats=await broadcast_to_valid_pass_total(bot, msg)
+            label='📦 Broadcast Pass Total'
+        elif state=='broadcast_vip_soiree':
+            await msg.answer('⏳ Broadcast Pass soirée en cours…')
+            stats=await broadcast_to_pass_soiree_without_total(bot, msg)
+            label='🎟 Broadcast Pass soirée sans Total'
+        elif state=='broadcast_vip_javana':
+            await msg.answer('⏳ Broadcast VIP JAVANA en cours…')
+            stats=await broadcast_to_valid_vip_javana(bot, msg)
+            label='💎 Broadcast VIP JAVANA'
+        else:
+            await msg.answer('⏳ Broadcast privé en cours…')
+            stats=await broadcast_to_private_starters(bot, msg)
+            label='📨 Broadcast privé'
         await msg.answer(
-            '✅ Broadcast privé terminé\n\n'
+            f'✅ {label} terminé\n\n'
             f'Destinataires : {stats["total"]}\n'
             f'Envoyés : {stats["sent"]}\n'
             f'Bot bloqué : {stats["blocked"]}\n'
@@ -901,9 +940,12 @@ async def cb_invite_health(cb:CallbackQuery):
 async def validate(cb:CallbackQuery,bot:Bot):
     if not cb.from_user or not is_admin(cb.from_user.id): return
     action,kind,id_s=cb.data.split(':'); ok=action=='validate'; oid=int(id_s)
-    if kind=='vip': await validate_vip(bot,oid,ok)
-    if kind=='crowd': await validate_crowd(bot,oid,ok)
-    await cb.message.answer('Action exécutée.'); await cb.answer()
+    result='Action exécutée.'
+    if kind=='vip':
+        result=await validate_vip(bot,oid,ok)
+    if kind=='crowd':
+        await validate_crowd(bot,oid,ok)
+    await cb.message.answer(result); await cb.answer()
 
 
 @router.callback_query(F.data.startswith('chat_role:'))

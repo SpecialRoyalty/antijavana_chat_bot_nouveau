@@ -100,19 +100,14 @@ async def all_messages(msg: Message, bot: Bot):
     if msg.text and await trusted_command(bot, msg):
         return
 
-    # Le groupe inactif ne doit jamais injecter des médias dans les VIP.
-    active = await active_group_id()
-    if not active or msg.chat.id != active:
-        if not msg.from_user or msg.from_user.id not in __import__('app.config', fromlist=['get_settings']).get_settings().all_admin_ids:
-            try:
-                await bot.delete_message(msg.chat.id, msg.message_id)
-            except Exception:
-                pass
-            return
-
+    # La modération doit tourner dans A ET B, même si l'un est inactif.
+    # moderate_message() applique d'abord les règles globales (anti-lien,
+    # hash-ban, anti-repost...), puis rejette la publication du groupe fermé.
     allowed = await moderate_message(bot, msg)
     if not allowed:
         return
 
-    if msg.chat.id == active:
+    # Seul le groupe réellement actif peut alimenter les VIP communs.
+    active = await active_group_id()
+    if active and msg.chat.id == active:
         await copy_media_to_vip(bot, msg)
