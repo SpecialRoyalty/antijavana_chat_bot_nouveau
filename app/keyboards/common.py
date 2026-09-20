@@ -12,12 +12,15 @@ def admin_kb():
         [('⏰ Auto ON/OFF','adm_auto'),('📦 Objectif','adm_goal')],
         [('⚖️ Justice','adm_justice'),('🧹 Nettoyage','adm_cleanup')],
         [('🕵️ Suspects','adm_suspects'),('💎 VIP','adm_vip')],
+        [('🔁 Repost VIP ON/OFF','vip_repost_toggle')],
         [('🎟 Pass gratuit','adm_freepass')],
         [('💰 Crowdfunding','adm_crowd'),('📢 Publicités','adm_ads')],
         [('🎁 Invitations','adm_invites'),('🏆 Top inviteurs','adm_top')],
         [('🛡️ Modération','adm_mod'),('📜 Règles','adm_rules')],
         [('🚫 Hash ban','adm_hashban')],
         [('📢 Broadcast groupe','adm_broadcast_group'),('📨 Broadcast privé','adm_broadcast_private')],
+        [('📦 Broadcast Pass Total','adm_broadcast_vip_total'),('🎟 Broadcast Pass soirée','adm_broadcast_vip_soiree')],
+        [('💎 Broadcast VIP JAVANA','adm_broadcast_vip_javana')],
         [('👑 Grâce prés.','adm_pardon_ban'),('⚖️ Grâce min.','adm_pardon_mute')],
         [('📊 Rapports','adm_reports'),('⚙️ Paramètres','adm_settings')],
     ]
@@ -130,6 +133,8 @@ def vip_admin_kb():
         [InlineKeyboardButton(text='📦 Texte Pass total', callback_data='await:vip_offer_text:total'), InlineKeyboardButton(text='💶 Prix total', callback_data='await:vip_price:total')],
         [InlineKeyboardButton(text='💎 Texte JAVANA', callback_data='await:vip_offer_text:javana'), InlineKeyboardButton(text='💶 Prix JAVANA', callback_data='await:vip_price:javana')],
         [InlineKeyboardButton(text='🎟 Pass soirée gratuit', callback_data='adm_freepass')],
+        [InlineKeyboardButton(text='🔁 Repost médias VIP ON/OFF', callback_data='vip_repost_toggle')],
+        [InlineKeyboardButton(text='🔗 Tester les liens VIP', callback_data='vip_link_test')],
         [InlineKeyboardButton(text='🩺 Vérifier diffusion', callback_data='vip_health')],
         [InlineKeyboardButton(text='⬅️ Retour', callback_data='adm_dashboard')]
     ])
