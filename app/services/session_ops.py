@@ -118,17 +118,21 @@ async def cleanup_session(bot:Bot, all_known:bool=False):
     from app.services.multigroup import main_group_ids
     sid=int(await st.get_value('active_session_id','0') or '0')
     groups=await main_group_ids()
+    # Le nettoyage de session ne doit JAMAIS toucher aux copies VIP.
+    # Les copies VIP partagent le même session_id via track(), ce qui faisait
+    # auparavant disparaître tous les médias VIP à la fermeture du groupe.
+    if not groups:
+        return 0, 0
     async with SessionLocal() as db:
         q=select(
             TrackedMessage.id,TrackedMessage.chat_id,TrackedMessage.message_id,TrackedMessage.is_media
-        ).where(TrackedMessage.deleted.is_(False),TrackedMessage.kind!='status')
-        if all_known:
-            if groups:
-                q=q.where(TrackedMessage.chat_id.in_(groups))
-        elif sid:
+        ).where(
+            TrackedMessage.deleted.is_(False),
+            TrackedMessage.kind!='status',
+            TrackedMessage.chat_id.in_(groups),
+        )
+        if not all_known and sid:
             q=q.where(TrackedMessage.session_id==sid)
-        elif groups:
-            q=q.where(TrackedMessage.chat_id.in_(groups))
         items=list((await db.execute(q)).all())
 
     semaphore=asyncio.Semaphore(4)
@@ -210,6 +214,7 @@ async def send_report(bot:Bot, kind='auto', sid:int|None=None):
                     TrackedMessage.session_id==sid,
                     TrackedMessage.deleted==False,
                     TrackedMessage.kind!='status',
+                    ~TrackedMessage.kind.like('copy_%'),
                 )
             )).scalar() or 0
     text=(f'📊 RAPPORT DE SESSION\n\nType : {kind}\n'

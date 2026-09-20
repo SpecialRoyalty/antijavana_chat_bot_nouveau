@@ -226,7 +226,12 @@ async def contains_banned_hash(bot: Bot, msg: Message) -> bool:
 
 
 async def moderate_message(bot: Bot, msg: Message) -> bool:
-    """Retourne True seulement si le pipeline peut continuer vers la copie VIP."""
+    """Modère les DEUX groupes principaux, même lorsque l'un est inactif.
+
+    Les règles de sécurité (liens, hash-ban, anti-repost, mots interdits) sont
+    globales A+B. Seul l'enregistrement d'un nouveau média et la copie VIP sont
+    réservés au groupe actif réellement ouvert.
+    """
     if not msg.from_user:
         return False
 
@@ -234,33 +239,25 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
     from app.services.multigroup import is_main_group, active_group_id
     if not await is_main_group(msg.chat.id):
         return True
-    active = await active_group_id()
-    if msg.chat.id != active:
-        if msg.from_user.id not in _SETTINGS.all_admin_ids:
-            await delete(bot, msg)
-            return False
-        return True
 
     uid = msg.from_user.id
     text = msg.text or msg.caption or ""
     trusted = uid in _TRUSTED_IDS
     admin = uid in _ADMIN_IDS
+    active = await active_group_id()
+    open_ = await st.is_open()
+    active_here = bool(active and msg.chat.id == active)
+    media = is_media(msg)
+    may_store_new_media = bool(active_here and (open_ or trusted or admin))
 
-    if not await st.is_open() and not (trusted or admin):
-        await delete(bot, msg)
-        return False
-
-    # Anti-retour / publication immédiate : un membre dont l'arrivée a été
-    # réellement observée et qui poste un média pendant la fenêtre configurée
-    # est banni et tous ses contenus suivis sont supprimés.
-    if is_media(msg) and not (trusted or admin):
+    # Anti-retour : actif dans A comme dans B. Si quelqu'un rejoint puis publie
+    # immédiatement dans le groupe fermé, la même politique globale s'applique.
+    if media and not (trusted or admin):
         if await enforce_fast_join(bot, msg):
             return False
 
-    if is_media(msg):
-        # Pipeline rapide : ID (sans téléchargement) -> SHA (1 seul téléchargement)
-        # -> fingerprint seulement si nécessaire -> enregistrement en réutilisant
-        # le même fichier temporaire.
+    if media:
+        # 1) Hash-ban et anti-repost exacts par ID, communs à A+B.
         match = await find_banned_id(msg)
         if match.matched:
             deleted = await delete(bot, msg)
@@ -279,12 +276,15 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
                 await enforce_anti_repost_match(bot, msg, method)
                 return False
 
+        # 2) Un seul téléchargement pour SHA + perceptuel.
         probe = await open_media_probe(bot, msg)
         if probe is None:
-            # En cas d'échec temporaire de téléchargement, on conserve le comportement
-            # historique : le média peut continuer, mais son hash ne sera pas enrichi.
-            await record_media(msg, bot=None)
-            remember_stored_keys(msg, None)
+            # On n'enregistre un nouveau média que s'il appartient à la vraie
+            # session active. Un média envoyé dans le groupe fermé est supprimé
+            # plus bas et ne devient pas une référence anti-repost.
+            if may_store_new_media:
+                await record_media(msg, bot=None)
+                remember_stored_keys(msg, None)
         else:
             try:
                 match = await find_banned_sha(probe)
@@ -304,7 +304,6 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
                         await enforce_anti_repost_match(bot, msg, method)
                         return False
 
-                # FFmpeg n'est lancé qu'après les contrôles exacts ID/SHA.
                 match = await find_banned_perceptual(probe, msg)
                 if match.matched:
                     deleted = await delete(bot, msg)
@@ -322,18 +321,21 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
                         await enforce_anti_repost_match(bot, msg, method)
                         return False
 
-                await record_media(msg, bot=bot, probe=probe)
-                remember_stored_keys(msg, probe.sha256)
+                if may_store_new_media:
+                    await record_media(msg, bot=bot, probe=probe)
+                    remember_stored_keys(msg, probe.sha256)
             finally:
                 close_media_probe(probe)
 
-    # Liens interdits pour tout le monde sauf admins ; trusted supprimé sans sanction.
+    # Le contrôle anti-lien est volontairement AVANT le rejet du groupe inactif.
+    # Avant cette correction, B court-circuitait toute la modération quand A était actif.
     if has_link(text):
         await delete(bot, msg)
         if not (trusted or admin):
             await ban(bot, msg.chat.id, uid)
         return False
 
+    # Admin/trusted gardent leur immunité historique pour les autres règles.
     if trusted or admin:
         return True
 
@@ -362,7 +364,13 @@ async def moderate_message(bot: Bot, msg: Message) -> bool:
         await restrict(bot, msg.chat.id, uid, 1)
         return False
 
-    if text and not is_media(msg):
+    # Le groupe non sélectionné et un groupe fermé restent interdits à la
+    # publication membre, mais seulement APRÈS les contrôles de sécurité globaux.
+    if not active_here or not open_:
+        await delete(bot, msg)
+        return False
+
+    if text and not media:
         if not await has_sent_media(uid):
             await delete(bot, msg)
             warning = await bot.send_message(

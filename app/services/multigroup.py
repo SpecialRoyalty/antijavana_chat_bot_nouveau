@@ -713,6 +713,23 @@ async def probe_chat(bot: Bot, row: ManagedChat, *, real_vip_test: bool = False)
                 except Exception:
                     lines.append('Envoi réel : ❌')
                     ok = False
+                # Un simple getChat ne prouve pas que les paiements pourront
+                # recevoir un lien. On crée puis révoque réellement un lien test.
+                test_link=''
+                try:
+                    link=await bot.create_chat_invite_link(row.chat_id, member_limit=1, name='infra-healthcheck')
+                    test_link=link.invite_link
+                    lines.append('Création lien : ✅')
+                    await bot.revoke_chat_invite_link(row.chat_id, test_link)
+                    lines.append('Révocation lien : ✅')
+                except Exception:
+                    lines.append('Création/révocation lien : ❌')
+                    ok = False
+                    if test_link:
+                        try:
+                            await bot.revoke_chat_invite_link(row.chat_id, test_link)
+                        except Exception:
+                            pass
     except Exception as exc:
         ok = False
         lines.append(f'Accès : ❌ ({type(exc).__name__})')

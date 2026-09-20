@@ -21,7 +21,7 @@ async def health_text(bot:Bot):
     s=get_settings(); slot=await st.time_slot(); _start,end=slot_times(slot,s.timezone)
     async with SessionLocal() as db:
         errors=int((await db.execute(select(func.count(ErrorLog.id)))).scalar() or 0)
-        tracked=int((await db.execute(select(func.count(TrackedMessage.id)).where(TrackedMessage.deleted==False))).scalar() or 0)
+        tracked=int((await db.execute(select(func.count(TrackedMessage.id)).where(TrackedMessage.deleted==False, ~TrackedMessage.kind.like('copy_%')))).scalar() or 0)
         suspects=int((await db.execute(select(func.count(User.id)).where(User.suspect_score>=50))).scalar() or 0)
         vip_pending=int((await db.execute(select(func.count(VipOrder.id)).where(VipOrder.status=='pending'))).scalar() or 0)
         chats=list((await db.execute(select(ManagedChat).order_by(ManagedChat.role))).scalars().all())

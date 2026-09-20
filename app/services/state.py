@@ -86,7 +86,7 @@ async def track(chat_id:int,message_id:int,user_id:int|None,kind='message',is_me
             .returning(TrackedMessage.id)
         )
         inserted=(await db.execute(stmt)).scalar_one_or_none()
-        if inserted is not None and sid and kind!='status':
+        if inserted is not None and sid and kind!='status' and not str(kind).startswith('copy_'):
             from app.db.models import SessionLog
             values={'messages_seen': SessionLog.messages_seen + 1}
             if is_media:

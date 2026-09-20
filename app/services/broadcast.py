@@ -9,7 +9,7 @@ from aiogram.types import Message, User as TelegramUser
 from sqlalchemy import func, select, update
 
 from app.config import get_settings
-from app.db.models import PrivateSubscriber
+from app.db.models import PrivateSubscriber, VipAccess
 from app.db.session import SessionLocal
 from app.services.state import log_error
 
@@ -135,3 +135,82 @@ async def private_subscriber_count() -> int:
         return int((await db.execute(
             select(func.count(PrivateSubscriber.user_id)).where(PrivateSubscriber.active.is_(True))
         )).scalar() or 0)
+
+
+async def _broadcast_to_user_ids(bot: Bot, source: Message, user_ids: list[int]) -> dict[str, int]:
+    """Diffuse un message privé à une liste d'utilisateurs Telegram dédupliquée."""
+    recipients=list(dict.fromkeys(int(x) for x in user_ids if x))
+    sent=blocked=errors=0
+    for user_id in recipients:
+        try:
+            await _copy_with_retry(bot, user_id, source)
+            sent += 1
+        except TelegramForbiddenError:
+            blocked += 1
+        except TelegramBadRequest as exc:
+            errors += 1
+            await log_error('broadcast_vip_bad_request', exc)
+        except Exception as exc:
+            errors += 1
+            await log_error('broadcast_vip', exc)
+        await asyncio.sleep(0.045)
+    return {'total':len(recipients),'sent':sent,'blocked':blocked,'errors':errors}
+
+
+async def valid_pass_total_user_ids() -> list[int]:
+    """Utilisateurs ayant actuellement un Pass Total actif."""
+    async with SessionLocal() as db:
+        rows=(await db.execute(
+            select(VipAccess.user_id).where(
+                VipAccess.offer=='total',
+                VipAccess.status=='active',
+            ).distinct()
+        )).scalars().all()
+    return [int(x) for x in rows]
+
+
+async def pass_soiree_without_total_user_ids() -> list[int]:
+    """Historique Pass soirée, en excluant ceux qui ont déjà un Pass Total actif.
+
+    On garde pending/active/expired : l'objectif de ce broadcast est précisément
+    de pouvoir recontacter les anciens acheteurs Pass soirée. Les accès failed
+    ne sont pas considérés comme un Pass réellement obtenu.
+    """
+    async with SessionLocal() as db:
+        total_ids=set(int(x) for x in (await db.execute(
+            select(VipAccess.user_id).where(
+                VipAccess.offer=='total',
+                VipAccess.status=='active',
+            ).distinct()
+        )).scalars().all())
+        soiree_ids=set(int(x) for x in (await db.execute(
+            select(VipAccess.user_id).where(
+                VipAccess.offer=='soiree',
+                VipAccess.status.in_(['pending','active','expired']),
+            ).distinct()
+        )).scalars().all())
+    return sorted(soiree_ids-total_ids)
+
+
+async def valid_vip_javana_user_ids() -> list[int]:
+    """Utilisateurs ayant actuellement un accès VIP JAVANA actif."""
+    async with SessionLocal() as db:
+        rows=(await db.execute(
+            select(VipAccess.user_id).where(
+                VipAccess.offer=='javana',
+                VipAccess.status=='active',
+            ).distinct()
+        )).scalars().all()
+    return [int(x) for x in rows]
+
+
+async def broadcast_to_valid_pass_total(bot: Bot, source: Message) -> dict[str, int]:
+    return await _broadcast_to_user_ids(bot, source, await valid_pass_total_user_ids())
+
+
+async def broadcast_to_pass_soiree_without_total(bot: Bot, source: Message) -> dict[str, int]:
+    return await _broadcast_to_user_ids(bot, source, await pass_soiree_without_total_user_ids())
+
+
+async def broadcast_to_valid_vip_javana(bot: Bot, source: Message) -> dict[str, int]:
+    return await _broadcast_to_user_ids(bot, source, await valid_vip_javana_user_ids())
