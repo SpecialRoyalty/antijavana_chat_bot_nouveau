@@ -8,7 +8,7 @@ from app.config import get_settings
 from app.services import settings as st
 from app.services.state import ensure_status_message, vote_count
 from app.services.session_ops import set_group_open, security_close_if_manual
-from app.services.vip import send_vip_ad, expire_pass_soiree, send_due_pass_soiree_links
+from app.services.vip import send_vip_ad, expire_pass_soiree, send_due_pass_soiree_links, retry_pending_permanent_vip_links, daily_vip_link_test
 from app.services.crowdfunding import send_crowd_ad
 from app.services.ads import send_random_ad
 from app.services.invites import validate_invites, top_text, send_invite_ad
@@ -170,6 +170,8 @@ def start_scheduler(bot:Bot):
     sch.add_job(send_random_ad,'cron',hour='22,0',minute='45,5',second=25,args=[bot],id='random_ads')
     sch.add_job(send_invite_ad,'cron',hour='23',minute='25',second=45,args=[bot],id='invite_ad')
     sch.add_job(send_due_pass_soiree_links,'cron',hour='23',minute='0',second=5,args=[bot],id='pass_soiree_release')
+    sch.add_job(retry_pending_permanent_vip_links,'interval',minutes=10,args=[bot],id='vip_link_retry',next_run_time=now+timedelta(seconds=110))
+    sch.add_job(daily_vip_link_test,'cron',hour='12',minute='10',second=0,args=[bot],id='vip_link_daily_test')
     sch.add_job(send_due_free_pass_links,'cron',hour='23',minute='0',second=25,args=[bot],id='free_pass_release')
     sch.add_job(expire_pass_soiree,'cron',hour='5',minute='0',second=10,args=[bot],id='expire_pass')
     sch.start()
