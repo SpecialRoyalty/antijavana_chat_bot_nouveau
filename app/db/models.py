@@ -121,6 +121,7 @@ class VipOrder(Base):
     amount: Mapped[str]=mapped_column(String(50), default='')
     status: Mapped[str]=mapped_column(String(30), default='pending')
     screenshot_file_id: Mapped[str|None]=mapped_column(Text, nullable=True)
+    proof_received_at: Mapped[datetime|None]=mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime]=mapped_column(DateTime, default=datetime.utcnow)
 
 class Crowdfunding(Base):

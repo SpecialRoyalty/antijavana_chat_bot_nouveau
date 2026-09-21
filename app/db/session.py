@@ -16,6 +16,13 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSe
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Migration légère compatible avec les bases Railway déjà existantes.
+        # ``create_all`` ne rajoute pas de colonne sur une table existante.
+        # On mémorise l'heure de réception de la preuve de paiement pour calculer
+        # équitablement le cycle du Pass soirée.
+        await conn.execute(text(
+            'ALTER TABLE vip_orders ADD COLUMN IF NOT EXISTS proof_received_at TIMESTAMP NULL'
+        ))
         # Index complémentaires sur les chemins les plus fréquents. IF NOT EXISTS
         # rend la mise à jour compatible avec une base Railway déjà existante.
         await conn.execute(text(
