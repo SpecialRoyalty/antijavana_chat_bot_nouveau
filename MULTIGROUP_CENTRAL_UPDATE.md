@@ -64,7 +64,7 @@ Ils utilisent le groupe actif. Si aucun groupe n'est actif, ils ne publient rien
 
 `Broadcast groupe` cible le groupe actif. `Broadcast privé` reste commun à toutes les personnes ayant démarré le bot.
 
-Les Pass soirée/gratuits ne sont pas libérés à 23h si aucune vraie session n'est ouverte.
+Les Pass soirée payants ne dépendent plus de l'ouverture : ils suivent le cycle 06h/12h décrit dans `PASS_SOIREE_CYCLE_UPDATE.md`. Les Pass gratuits restent liés à la session.
 
 ## Santé et VIP
 

@@ -22,7 +22,7 @@
 - Invitations : un lien par propriétaire, un crédit par invité global, validation 5 min, score/rang DM, TOP 10 après justice, TOP 3 VIP manuel.
 - Banni global : son lien d'invitation personnel est révoqué sans effacer son score historique.
 - Crowdfunding / pubs / règles / broadcast groupe / pubs VIP / Pass gratuit : groupe actif.
-- AUCUNE ouverture : aucune diffusion de session et aucun Pass soirée/gratuit libéré à 23h.
+- AUCUNE ouverture : aucune diffusion de session. Les Pass soirée payants suivent leur cycle autonome ; les Pass gratuits restent liés à la session.
 - Si une session ouvre après 23h, les Pass soirée/gratuits restés en attente sont libérés à l'ouverture réelle.
 - VIP communs : même destination quel que soit A/B.
 - Test infrastructure : accès + admin + permissions.

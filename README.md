@@ -33,7 +33,7 @@ Bot Aiogram/PostgreSQL pour piloter deux groupes principaux avec les mêmes VIP 
 
 ## Aucune ouverture
 
-Si `🌑 Aucune ouverture` est sélectionné, les deux groupes restent fermés. Le scheduler continue pour la maintenance/sécurité mais aucune diffusion de session n'est lancée et les Pass soirée/gratuits ne sont pas libérés à 23h.
+Si `🌑 Aucune ouverture` est sélectionné, les deux groupes restent fermés. Le scheduler continue pour la maintenance/sécurité mais aucune diffusion de session n'est lancée. Les Pass soirée **payants** suivent désormais leur cycle d'achat/validation propre (06h/12h) et ne dépendent plus de l'ouverture du groupe. Le Pass soirée gratuit conserve son fonctionnement de campagne lié à la session.
 
 ## Migration
 
