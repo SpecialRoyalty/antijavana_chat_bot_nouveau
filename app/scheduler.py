@@ -169,10 +169,16 @@ def start_scheduler(bot:Bot):
     sch.add_job(send_crowd_ad,'cron',hour='22,0',minute='55,15',second=15,args=[bot],id='crowd_ads')
     sch.add_job(send_random_ad,'cron',hour='22,0',minute='45,5',second=25,args=[bot],id='random_ads')
     sch.add_job(send_invite_ad,'cron',hour='23',minute='25',second=45,args=[bot],id='invite_ad')
-    sch.add_job(send_due_pass_soiree_links,'cron',hour='23',minute='0',second=5,args=[bot],id='pass_soiree_release')
+    # Pass soirée payant : libération immédiate après validation entre 06h et minuit,
+    # ou à 12h pour les paiements reçus entre 00h et 05h59. Un passage toutes
+    # les 5 minutes sert aussi de retry après une panne Telegram.
+    sch.add_job(send_due_pass_soiree_links,'cron',minute='*/5',second=5,args=[bot],id='pass_soiree_release')
     sch.add_job(retry_pending_permanent_vip_links,'interval',minutes=10,args=[bot],id='vip_link_retry',next_run_time=now+timedelta(seconds=110))
-    sch.add_job(daily_vip_link_test,'cron',hour='12',minute='10',second=0,args=[bot],id='vip_link_daily_test')
+    # Test quotidien avant la libération de midi des Pass soirée nocturnes.
+    sch.add_job(daily_vip_link_test,'cron',hour='11',minute='50',second=0,args=[bot],id='vip_link_daily_test')
     sch.add_job(send_due_free_pass_links,'cron',hour='23',minute='0',second=25,args=[bot],id='free_pass_release')
-    sch.add_job(expire_pass_soiree,'cron',hour='5',minute='0',second=10,args=[bot],id='expire_pass')
+    # Expiration sécurisée : le job ne finalise qu'après révocation du lien et
+    # confirmation que le membre est réellement absent. Les échecs sont retentés.
+    sch.add_job(expire_pass_soiree,'cron',minute='*/5',second=10,args=[bot],id='expire_pass')
     sch.start()
     return sch
